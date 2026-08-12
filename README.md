@@ -13,7 +13,7 @@ Knowe turns agents into a team — inside the chat interface you already know. C
 Pull different agents into one group chat to serve a single project. Teams are organized by project — every project has its own dedicated group.
 
 <p align="center">
-  <video src="https://raw.githubusercontent.com/HirezmingD/Knowe-agent-groupchat/main/assets/videos/1-create-group-add-member.mp4" width="80%" controls autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/4c223c55-42f4-4c47-9c36-c14676afff50" width="80%" controls autoplay loop muted playsinline></video>
 </p>
 
 ## Customize your team members
@@ -21,7 +21,7 @@ Pull different agents into one group chat to serve a single project. Teams are o
 Every agent is an independent instance — with its own identity and memory, and a model service you can freely choose for each. Give different members different "brains", so the right member handles the right job.
 
 <p align="center">
-  <video src="https://raw.githubusercontent.com/HirezmingD/Knowe-agent-groupchat/main/assets/videos/2-change-models-and-character-designs.mp4" width="80%" controls autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/994cc11b-793e-4ae8-ae65-4850bf257143" width="80%" controls autoplay loop muted playsinline></video>
 </p>
 
 ## One sentence in, the team works
@@ -29,7 +29,7 @@ Every agent is an independent instance — with its own identity and memory, and
 No prompt engineering, no task breakdowns to write. The Coordinator automatically splits your request into subtasks, assigns them to the right Workers, and reports back. When your decision is needed, a card pops up — one click and the team moves on.
 
 <p align="center">
-  <video src="https://raw.githubusercontent.com/HirezmingD/Knowe-agent-groupchat/main/assets/videos/3-manager-splits-tasks.mp4" width="80%" controls autoplay loop muted playsinline></video>
+  <video src="https://github.com/user-attachments/assets/e73a3a42-1089-47bc-a584-92939b9b1dee" width="80%" controls autoplay loop muted playsinline></video>
 </p>
 
 ## And more
