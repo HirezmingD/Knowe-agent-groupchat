@@ -4,7 +4,7 @@
 
 # Knowe — 用群聊的方式，指挥你的 Agent 团队
 
-[中文](README.zh-CN.md) | [English](README.md)
+[简体中文](README.zh-CN.md) | [English](README.md)
 
 Knowe 用你最熟悉的聊天软件界面，把 Agent 变成一支团队。你可以给每个项目建立自己的专属群聊、定制专属 Agent 团队。
 

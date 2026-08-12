@@ -4,7 +4,7 @@
 
 # Knowe — Command your Agent team through group chat
 
-[English](README.md) | [中文](README.zh-CN.md)
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 Knowe turns agents into a team — inside the chat interface you already know. Create a dedicated group chat for each project, and build a team of agents customized to it.
 
