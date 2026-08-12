@@ -1,0 +1,143 @@
+/* 主窗口文件卡片。独立预览窗口的全部样式位于 knowe-preview-window.css。 */
+
+.m-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  gap: var(--space-2);
+  max-width: 78%;
+}
+.m-content .bubble { max-width: 100%; }
+
+.file-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  animation: msgIn var(--dur-enter) var(--ease-out) both;
+}
+
+.file-card-fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 340px;
+  min-height: 30px;
+  padding: 2px 4px 0;
+}
+.file-card-fold-summary {
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 16px;
+}
+.file-card-fold-toggle {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  border-radius: var(--r-xs);
+}
+.file-card-fold-toggle:hover { background: var(--accent-tint); }
+.file-card-fold-toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+
+.file-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 340px;
+  padding: 9px 11px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition:
+    background var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out);
+}
+.file-card:hover { background: var(--surface-2); border-color: var(--accent-ring); box-shadow: var(--shadow-2); }
+.file-card:active { transform: scale(.99); }
+.file-card:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--accent-ring); }
+.file-card.busy { cursor: progress; }
+
+.fc-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  border-radius: var(--r-sm);
+}
+.fc-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fc-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 19px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fc-meta { display: flex; align-items: center; gap: 8px; }
+.fc-tag {
+  padding: 1px 6px;
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  letter-spacing: .03em;
+  background: var(--surface-2);
+  border-radius: 5px;
+}
+.fc-size { color: var(--ink-3); font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; }
+.fc-preview-error {
+  margin-top: 3px;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+.fc-reveal {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--ink-3);
+  border-radius: var(--r-xs);
+}
+.fc-reveal:hover { color: var(--accent); background: var(--accent-tint); }
+.fc-reveal:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.fc-reveal.busy { cursor: progress; }
+.fc-reveal-error {
+  position: absolute;
+  right: 8px;
+  bottom: -20px;
+  z-index: 2;
+  max-width: 260px;
+  padding: 2px 6px;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  box-shadow: var(--shadow-1);
+}
+

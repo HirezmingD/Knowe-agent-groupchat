@@ -1,0 +1,281 @@
+/**
+ * knowledge-view.css — 知识库视图的样式补丁（v0.43，知识资产 + 技能包）
+ *
+ * v0.42–v0.43 追加（文件末尾「重构新增」整段）：侧栏两级树（kn-l1/l2/l3 + kn-chev）、
+ * 技能包徽标与卡片、核心徽标、待审策展行（kn-review）、调整范围雾化弹窗
+ * （kn-scrim-blur + 类别选块）、右侧预览面板（kn-preview-* 一族，交互同
+ * v0.36.1 文件预览：绝对定位锚右缘 + translateX 滑入 + 左缘拖宽）、
+ * 资产 markdown 排版（kn-md）。全部只取设计令牌，不写死色值。
+ *
+ * 上半部分：Knowe-UI_v1.3.reference.html 里知识库区域用到、但既有组件
+ * （ContactsView / FavoritesView）尚未引入的类，**逐字照抄**设计稿：
+ *   .seg（1116–1118 行）/ .notice（1107–1114）/ .chip 及四色（1087–1094）/
+ *   .card-status 及三态（1096–1099）
+ * 若全局样式表后来也补了这些类，本文件的重复声明与设计稿一字不差 → 视觉无差别，
+ * 届时删掉这半段即可。
+ *
+ * 下半部分：kn- 前缀的本视图私有类（引用历史列表、编辑弹窗多行输入），
+ * 只取设计令牌，不写死任何色值。
+ */
+
+/* ═══ 照抄设计稿（reference.html） ═══ */
+
+/* 分段控件（ref 1116–1118） */
+.seg{display:inline-flex;background:var(--surface-sunken);border-radius:var(--r-sm);padding:2px;gap:2px}
+.seg button{padding:4px 12px;border-radius:7px;font-size:12px;font-weight:500;color:var(--ink-2);transition:background var(--dur-micro),color var(--dur-micro)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1)}
+
+/* 知识库待审通栏（ref 1107–1114） */
+.notice{
+  display:flex;align-items:center;gap:var(--space-2);
+  background:var(--accent-tint);border-radius:var(--r-md);
+  padding:10px var(--space-4);margin:0 var(--space-8) var(--space-3);
+  font-size:13px;color:var(--ink);
+}
+.notice svg{color:var(--accent);flex-shrink:0}
+.notice .lk{margin-left:auto;color:var(--accent);font-weight:500;cursor:pointer}
+
+/* 类型 chip（ref 1087–1094） */
+.chip{
+  display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--r-xs);
+  font-size:11px;line-height:20px;font-weight:600;flex-shrink:0;
+}
+.chip.info{background:var(--info-bg);color:var(--info)}
+.chip.warn{background:var(--warning-bg);color:var(--warning)}
+.chip.acc{background:var(--accent-tint);color:var(--accent)}
+.chip.ok{background:var(--success-bg);color:var(--success)}
+
+/* 状态小圆点（ref 1096–1099） */
+.card-status{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:7px}
+.card-status.ok{background:var(--success)}
+.card-status.pend{background:var(--accent)}
+.card-status.retired{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+
+/* ═══ 本视图私有（kn- 前缀，只取令牌） ═══ */
+
+/* 空态里的可点链接（.empty p .lk 设计稿有、.empty2 没有 → 补齐同款） */
+.empty2 p .lk{color:var(--accent);cursor:pointer}
+.empty2 p .lk:hover{color:var(--accent-hover)}
+
+/* 编辑弹窗：摘要多行输入（.modal-input 的多行款） */
+.kn-edit-ta{
+  width:100%;min-height:96px;background:var(--surface-sunken);border-radius:var(--r-sm);
+  padding:10px var(--space-3);font-size:14px;line-height:22px;color:var(--ink);
+  margin-bottom:var(--space-4);resize:none;font-family:inherit;
+}
+.kn-edit-label{font-size:12px;line-height:16px;color:var(--ink-3);margin-bottom:6px}
+
+/* 引用历史弹窗：来源清单 */
+.kn-hist{max-height:300px;overflow-y:auto;margin:var(--space-2) 0 var(--space-5);display:flex;flex-direction:column;gap:var(--space-2)}
+.kn-hist-row{background:var(--surface-sunken);border-radius:var(--r-sm);padding:10px var(--space-3)}
+.kn-hist-top{display:flex;align-items:center;gap:8px;font-size:12px;line-height:16px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kn-hist-top b{color:var(--ink);font-weight:600;font-size:13px}
+.kn-hist-date{margin-left:auto}
+.kn-hist-excerpt{margin-top:4px;font-size:13px;line-height:20px;color:var(--ink-2)}
+
+/* ═══════════════════════════════════════════════════════════════
+   v0.42–v0.43 重构新增
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 侧栏两级树（新增需求 1）──
+   .navrow 基座沿用全局；这里只补层级缩进、折叠箭头与徽标。 */
+.kn-chev{
+  width:16px;height:16px;display:flex;align-items:center;justify-content:center;
+  color:var(--ink-3);flex-shrink:0;
+  transition:transform var(--dur-micro),background var(--dur-micro),color var(--dur-micro);
+}
+.kn-chev svg{width:14px;height:14px}
+.kn-chev.open{transform:rotate(90deg)}
+.kn-chev.tail{margin-left:auto;border-radius:var(--r-xs)}
+.kn-chev.tail:hover{background:var(--surface-sunken);color:var(--ink)}
+.kn-l1 .navrow-nm{font-weight:600}
+.kn-l2{padding-left:34px}
+.kn-l3{padding-left:52px}
+
+/* 计数与「下一步开放」徽标（技能包 L2 行尾） */
+.kn-count{
+  margin-left:auto;flex-shrink:0;font-size:11px;line-height:16px;
+  color:var(--ink-3);background:var(--surface-sunken);border-radius:999px;padding:1px 7px;
+  font-variant-numeric:tabular-nums;
+}
+.kn-badge{
+  margin-left:auto;flex-shrink:0;max-width:94px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;line-height:14px;font-weight:600;
+  color:var(--accent);background:var(--accent-tint);border-radius:999px;padding:2px 7px;
+}
+
+/* ── 卡片追加：核心徽标 / 待审策展行（报告 §5 使用闭环）── */
+.kn-core{
+  flex-shrink:0;font-size:10px;line-height:14px;font-weight:700;letter-spacing:.5px;
+  color:var(--accent);background:var(--accent-tint);border-radius:var(--r-xs);padding:1px 6px;
+}
+.kn-review{
+  display:flex;align-items:center;gap:var(--space-2);
+  margin-top:10px;padding-top:10px;border-top:1px dashed var(--surface-sunken);
+}
+.kn-flags{display:flex;gap:6px;flex-wrap:wrap;min-width:0}
+.kn-flag{font-size:11px;line-height:16px;font-weight:600;border-radius:var(--r-xs);padding:2px 8px}
+.kn-flag.warn{background:var(--warning-bg);color:var(--warning)}
+.kn-flag.acc{background:var(--accent-tint);color:var(--accent)}
+.kn-flag.mut{background:var(--surface-sunken);color:var(--ink-3)}
+.kn-review-acts{margin-left:auto;display:flex;gap:8px;flex-shrink:0}
+.kn-btn{
+  height:26px;padding:0 14px;border-radius:var(--r-sm);
+  font-size:12px;font-weight:600;color:var(--ink-2);background:var(--surface-sunken);
+  transition:background var(--dur-micro),color var(--dur-micro);
+}
+.kn-btn:hover{color:var(--ink)}
+.kn-btn.ok{background:var(--accent);color:var(--surface)}
+.kn-btn.ok:hover{background:var(--accent-hover)}
+
+/* ── v0.43：四态筛选在知识图谱 / 技能包间常驻 ── */
+.kn-status-filter{padding:0 16px 10px}
+.kn-status-filter .seg{display:flex;width:100%}
+.kn-status-filter .seg button{flex:1;min-width:0;padding-left:6px;padding-right:6px}
+
+/* ── 技能包卡片：三类真实来源、独立生命周期 ── */
+.kn-skill-ic{color:var(--accent);display:flex;flex-shrink:0}
+.kn-skill .card-title{font-variant-numeric:tabular-nums}
+.kn-skill.immutable{cursor:default}
+.kn-immutable{
+  flex-shrink:0;font-size:10px;line-height:14px;font-weight:700;
+  color:var(--info);background:var(--info-bg);border-radius:var(--r-xs);padding:1px 6px;
+}
+.kn-skill-meta{min-width:0;flex-wrap:wrap}
+.kn-pack-id{display:inline-block;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kn-install-placeholder{
+  height:30px;padding:0 12px;border-radius:var(--r-sm);
+  background:var(--surface-sunken);color:var(--ink-3);font-size:12px;font-weight:600;
+  cursor:not-allowed;opacity:.82;
+}
+
+/* ── stage 头右侧：偏好画像入口（画像层 PROFILE.md）── */
+.kn-head{display:flex;align-items:flex-start;gap:var(--space-4)}
+.kn-head-side{
+  margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;
+  font-size:12.5px;line-height:18px;padding-top:2px;flex-shrink:0;
+}
+.kn-head-side .lk{color:var(--accent);cursor:pointer}
+.kn-head-side .lk:hover{color:var(--accent-hover)}
+
+/* ── 空态图标统一放大（BookBig 本来 52；IcPuzzle 借同规格）── */
+.empty2 .e-ic svg{width:52px;height:52px}
+
+/* ── 「调整范围」雾化弹窗（新增需求 2②）──
+   在既有 .scrim 之上叠 app 内 blur：底下的卡片墙雾化、注意力聚焦到价值判断。 */
+.kn-scrim-blur{backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.kn-seg-block{display:flex;width:100%;margin-bottom:var(--space-4)}
+.kn-seg-block button{flex:1}
+.kn-cat-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:var(--space-4)}
+.kn-cat-pick{
+  display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;
+  border-radius:var(--r-sm);font-size:13px;font-weight:500;color:var(--ink-2);
+  background:var(--surface-sunken);box-shadow:inset 0 0 0 1px transparent;
+  transition:background var(--dur-micro),color var(--dur-micro),box-shadow var(--dur-micro);
+}
+.kn-cat-pick svg{width:15px;height:15px}
+.kn-cat-pick:hover{color:var(--ink)}
+.kn-cat-pick.sel{
+  background:var(--accent-tint);color:var(--accent);
+  box-shadow:inset 0 0 0 1.5px var(--accent);
+}
+.kn-hint{font-size:12px;line-height:18px;color:var(--ink-3);margin:6px 0 var(--space-4)}
+.modal-body b{color:var(--ink);font-weight:600}
+
+/* ── 右侧「预览」面板（新增需求 2③）──
+   交互同 v0.36.1 文件预览：wrap 盖满 kn-stage、只裁不接管指针；面板绝对定位
+   锚右缘、translateX 滑入滑出（不动 width → 卡片墙一像素不挤）；拖拽时关过渡。 */
+.kn-stage{position:relative}
+.kn-preview-wrap{
+  position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:30;
+}
+.kn-preview{
+  position:absolute;top:0;right:0;bottom:0;
+  width:var(--knpw,420px);max-width:100%;
+  background:var(--surface);box-shadow:var(--shadow-3);
+  border-left:1px solid var(--surface-sunken);
+  display:flex;flex-direction:column;
+  transform:translateX(calc(100% + 24px));
+  transition:transform var(--dur-soft) var(--ease-out);
+  pointer-events:auto;
+}
+.kn-preview-wrap.open .kn-preview{transform:translateX(0)}
+.kn-preview-wrap.dragging .kn-preview{transition:none}
+
+.kn-preview-resize{
+  position:absolute;left:-3px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:2;
+  touch-action:none;
+}
+.kn-preview-resize:hover,
+.kn-preview-wrap.dragging .kn-preview-resize{background:var(--accent-tint)}
+
+.kn-preview-head{
+  display:flex;align-items:center;gap:8px;flex-shrink:0;
+  padding:14px var(--space-4);border-bottom:1px solid var(--surface-sunken);
+}
+.kn-pv-icon{color:var(--accent);display:flex;flex-shrink:0}
+.kn-pv-name{
+  flex:1;min-width:0;font-size:14px;font-weight:600;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.kn-pv-close{
+  width:26px;height:26px;border-radius:var(--r-xs);flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;color:var(--ink-3);
+  transition:background var(--dur-micro),color var(--dur-micro);
+}
+.kn-pv-close:hover{background:var(--surface-sunken);color:var(--ink)}
+
+.kn-pv-meta{
+  display:flex;align-items:center;flex-wrap:wrap;gap:6px;flex-shrink:0;
+  padding:10px var(--space-4);border-bottom:1px solid var(--surface-sunken);
+  font-size:12px;line-height:16px;color:var(--ink-3);
+}
+.kn-pv-meta .sep{opacity:.6}
+
+.kn-preview-body{flex:1;overflow-y:auto;padding:var(--space-4) var(--space-4) var(--space-6)}
+.kn-pv-state{padding:28px 0;text-align:center;font-size:13px;color:var(--ink-3);overflow-wrap:anywhere;word-break:break-word}
+
+.kn-pv-usage{margin-top:var(--space-5);border-top:1px solid var(--surface-sunken);padding-top:var(--space-3)}
+.kn-pv-usage-head{font-size:12px;color:var(--ink-3);margin-bottom:6px}
+.kn-pv-usage-row{
+  display:flex;align-items:center;gap:8px;padding:6px 0;
+  font-size:12.5px;line-height:18px;color:var(--ink-2);
+  border-bottom:1px dashed var(--surface-sunken);
+}
+.kn-pv-usage-row:last-child{border-bottom:none}
+.kn-pv-usage-date{margin-left:auto;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+/* ── Markdown 排版（ASSET.md / SKILL.md / PROFILE.md 共用）──
+   Harness 制卡时已保证结构；这里只负责把结构渲染得干净好读。 */
+.kn-md{font-size:13.5px;line-height:22px;color:var(--ink);word-break:break-word}
+.kn-md>*:first-child{margin-top:0}
+.kn-md h1,.kn-md h2,.kn-md h3,.kn-md h4{
+  color:var(--ink);font-weight:600;line-height:1.4;
+  margin:var(--space-5) 0 var(--space-2);
+}
+.kn-md h1{font-size:17px}
+.kn-md h2{font-size:15px}
+.kn-md h3{font-size:14px}
+.kn-md h4{font-size:13.5px}
+.kn-md p{margin:0 0 var(--space-3)}
+.kn-md ul,.kn-md ol{margin:0 0 var(--space-3);padding-left:20px}
+.kn-md li{margin:3px 0}
+.kn-md li::marker{color:var(--ink-3)}
+.kn-md code{
+  background:var(--surface-sunken);border-radius:var(--r-xs);
+  padding:1px 5px;font-size:12.5px;
+}
+.kn-md pre{
+  background:var(--surface-sunken);border-radius:var(--r-sm);
+  padding:10px var(--space-3);overflow-x:auto;margin:0 0 var(--space-3);
+}
+.kn-md pre code{background:none;padding:0}
+.kn-md blockquote{
+  margin:0 0 var(--space-3);padding:2px 0 2px var(--space-3);
+  border-left:3px solid var(--accent-tint);color:var(--ink-2);
+}
+.kn-md hr{border:none;border-top:1px solid var(--surface-sunken);margin:var(--space-4) 0}
+.kn-md a{color:var(--accent)}
+.kn-md a:hover{color:var(--accent-hover)}
+.kn-md table{border-collapse:collapse;margin:0 0 var(--space-3);font-size:12.5px}
+.kn-md th,.kn-md td{border:1px solid var(--surface-sunken);padding:4px 10px;text-align:left}
+.kn-md th{background:var(--surface-sunken);font-weight:600}

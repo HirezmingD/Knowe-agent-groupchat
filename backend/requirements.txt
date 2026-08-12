@@ -1,0 +1,3 @@
+websockets>=14
+httpx>=0.27        # 只有真 LLM 档（KNOWE_AGENT=deepseek）才需要；Fake 档不用
+python-dotenv>=1.0   # 业主用 .env 放 DEEPSEEK_API_KEY

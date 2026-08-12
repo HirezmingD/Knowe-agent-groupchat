@@ -1,0 +1,92 @@
+/**
+ * add-agents-popover.css — [v1.0.23.4] 群聊中途添加 Agent 员工
+ *
+ * · 按钮：chat-head 内、stack 左侧的圆角矩形按钮（icon + 文字）
+ * · Popover：Knowe 浅色 surface 卡片 + 参考动画（fade + zoom .95→1
+ *   + translateY 2px→0，200ms ease-out；出场反向 150ms）
+ * · 角标：群内已有数（灰）+ 本次选择数（accent ×N）
+ * 色彩一律走设计令牌 var()，不写死色值。
+ */
+
+/* ── 头部按钮 ──
+   [v1.0.23.5] .btn-add-agents 样式整体迁移到 .effect-btn（knowe-components.css）：
+   照抄 InteractiveHoverButton（21st.dev）——胶囊 + hover 圆点膨胀铺满 + 文字右滑 + 白字箭头覆盖层。
+   此处保留类名语义（JSX 点击逻辑依赖），视觉全权交给 .effect-btn。 */
+
+/* ── backdrop（点外部关闭）──
+   [v1.0.24.1] 视觉遮罩去掉（background: transparent），保留透明点击层：点卡片外仍可关闭 */
+.pop-add-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: transparent;
+}
+
+/* ── Popover 容器（left/top 由 inline 提供：卡片右上角跟随鼠标）── */
+.pop-add-agents {
+  position: fixed;
+  z-index: 60;
+  width: 600px;   /* [v1.0.23.4-v4] 520→600：4 列网格列宽 ~136px，「AI/机器学习」完整显示 */
+  max-width: calc(100vw - 16px);
+  padding: 14px 14px 12px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  transform-origin: top right;
+  animation: pop-add-in 600ms var(--ease-out) both;
+}
+.pop-add-agents.closing {
+  animation: pop-add-out 450ms var(--ease-out) both;
+}
+
+/* [v1.0.23.4-v3] 动画照抄权威参考（21st.dev Notification Popover，shadcn 标准）：
+   fade-in-0 + zoom-in-95 + slide-in-from-top-2 =
+   opacity 0→1 · scale .95→1 · translateY(-2px→0)（从上方滑入 2px） */
+@keyframes pop-add-in {
+  from { opacity: 0; transform: translateY(-2px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes pop-add-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(-2px) scale(0.95); }
+}
+
+/* ── 头部 ── */
+.pop-add-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.pop-add-title {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.pop-add-x {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.pop-add-x:hover { background: var(--surface-2); color: var(--ink); }
+
+/* ── 操作行 ── */
+.pop-add-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pop-add-spacer { flex: 1; }
+.pop-add-btn { flex: 0 0 auto; height: 34px; padding: 0 16px; font-size: 13px; }

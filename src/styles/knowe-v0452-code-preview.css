@@ -1,0 +1,106 @@
+/* v0.45.2 · 代码预览。只使用 Knowe-UI_v1.3 的设计令牌，不引入第三方主题。 */
+.pv-code {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.pv-code-meta {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 16px;
+  flex: 0 0 auto;
+}
+
+.pv-code-language {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+.pv-code-count { margin-left: auto; color: var(--ink-3); }
+
+.pv-code-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface-sunken);
+  outline: none;
+  scrollbar-gutter: stable;
+}
+
+.pv-code-scroll:focus-visible {
+  box-shadow: inset 0 0 0 4px var(--accent-ring);
+}
+
+.pv-code-lines {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: var(--space-3) 0 var(--space-5) 58px;
+  counter-reset: item;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 20px;
+  tab-size: 4;
+  font-variant-ligatures: none;
+}
+
+.pv-code-line {
+  position: relative;
+  min-height: 20px;
+  padding: 0 var(--space-5) 0 var(--space-3);
+  white-space: pre;
+  color: var(--ink);
+}
+
+.pv-code-line::marker {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-code-line:hover { background: color-mix(in srgb, var(--accent-tint) 58%, transparent); }
+.pv-code-line code { font: inherit; color: inherit; }
+
+/* 去饱和语义色，与 Paper/Ink 两套 token 一起切换。 */
+.tok-plain { color: var(--ink); }
+.tok-comment { color: var(--ink-3); font-style: italic; }
+.tok-string { color: var(--success); }
+.tok-number { color: var(--warning); }
+.tok-keyword { color: var(--accent); font-weight: 600; }
+.tok-literal { color: var(--info); font-weight: 600; }
+.tok-property { color: var(--accent-hover); }
+.tok-tag { color: var(--danger); }
+.tok-operator { color: var(--ink-2); }
+.tok-variable { color: var(--warning); }
+.tok-meta { color: var(--danger); }
+
+.pv-code-truncated {
+  position: sticky;
+  left: 0;
+  bottom: 0;
+  width: fit-content;
+  margin: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  box-shadow: var(--shadow-1);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+@supports not (color: color-mix(in srgb, black, white)) {
+  .pv-code-line:hover { background: var(--accent-tint); }
+}

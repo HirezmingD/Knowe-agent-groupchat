@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      渲染进程入口。electron-vite 的 renderer 从这里起步：
+        · dev  —— 由 renderer dev server 提供，main.ts 通过 ELECTRON_RENDERER_URL 加载它；
+        · prod —— 打包进 out/renderer/index.html，main.ts 用 loadFile 加载。
+      React 从 /src/main.tsx 挂到 #root（这两个都是前端源码里已有的，壳不碰）。
+    -->
+    <title>Knowe</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

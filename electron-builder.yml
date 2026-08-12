@@ -1,0 +1,88 @@
+# electron-builder.yml — Knowe Windows 安装包配置（阶段二 2.2）
+#
+# 设计要点（对应 00-审计与架构报告 v2）：
+#   1. files 白名单最小集：out/** + package.json + public/brand/app-icon.png
+#      （APP_ICON 运行时从 asar 内读，main.ts:290 → PROJECT_ROOT/public/brand/app-icon.png）
+#   2. extraResources 把 PyInstaller 产物整体拷为 resources/backend/
+#      （main.ts:99-101 BACKEND_DIR=resourcesPath/backend，BACKEND_EXE 在其下）
+#      —— 不再要 runtime/ 与 backend/ 源码（阶段 1.5 后为死路径）
+#   3. ms-playwright/ 由 copy-chromium.mjs 预先拷入 dist/KnoweBackend/，
+#      随 extraResources 一起进 resources/backend/ms-playwright（main.ts:629 预期位置）
+#   4. NSIS：per-user 安装（不请求管理员）、允许改目录、卸载保留数据（installer.nsh）
+#   5. 输出到 release/（dist/ 是 PyInstaller 产物目录，不能混）
+
+appId: com.knowe.app
+productName: Knowe
+copyright: Copyright © 2026 Knowe
+
+# [v1.0.28] 版本号统一：内部轨 = 显示轨 = 1.0.28（package.json version 三段 semver，单一来源）。
+#   历史教训：electron-builder 26 用 semver.loose 解析 version，四段 1.0.26.2 会被拆成 1.0.2-6.2
+#   （v1.0.26.2 构建实锤）→ version 必须三段；曾用「内部 1.0.27 / 显示 1.0.26.2.0」双轨，
+#   但双轨导致服务器旧索引 URL 版本替换失效且维护混乱，v1.0.28 起统一。
+#   buildVersion（Windows FileVersion/ProductVersion）按 Windows 惯例四段 1.0.29.0，仅此一处。
+buildVersion: 1.0.33.0
+
+# 使用本地已装的 electron 发行版（node_modules/electron/dist），跳过「下载 zip → 解压 → rename」：
+# 腾讯电脑管家实时防护会锁住新解压的 electron.exe，导致 rename EPERM（实测），
+# 直接拷贝本地 dist 绕开该环节。
+electronDist: node_modules/electron/dist
+
+directories:
+  output: release
+  buildResources: build
+
+# asar 内只放最小运行集；main 进程无第三方运行时依赖（externalizeDepsPlugin）
+files:
+  - out/**
+  - package.json
+  - public/brand/app-icon.png
+
+# 后端（PyInstaller onedir 产物，214MB + ms-playwright 271MB）整体进 resources/backend
+extraResources:
+  - from: dist/KnoweBackend
+    to: backend
+    filter:
+      - "**/*"
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  # 向导式安装（非一键）：允许用户选安装目录
+  oneClick: false
+  # 关键：per-user 安装，不请求管理员权限（安装目录必须用户可写，数据/日志运行时写入）
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # 快捷方式
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Knowe
+  # 图标：安装器/卸载器/快捷方式共用多帧 icon.ico（和洲拍板：四类共用）
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  # 自定义 NSIS 脚本：卸载页「保留聊天记录与项目数据」默认勾选 + 卸载跳过 data/Logs
+  include: build/installer.nsh
+  # electron-builder 的 appData 清理开关（默认 false）——我们的数据在安装目录 data/，
+  # 由 installer.nsh 的 customRemoveFiles 控制，这里保持默认
+  deleteAppDataOnUninstall: false
+  # 产物命名：Knowe-Setup-${version}.exe（连字符，无空格）。
+  #   [v1.0.33] GitHub provider 下 latest.yml 的 url 用 safeArtifactName（空格→连字符），
+  #   磁盘产物必须与之一致，否则客户端下载 404（实测：Knowe Setup 1.0.33.exe 生成
+  #   latest.yml 引用 Knowe-Setup-1.0.33.exe，名字失配）。连字符命名三者统一，直接上传。
+  artifactName: Knowe-Setup-${version}.${ext}
+# [v1.0.33] 自动更新发布源：GitHub Releases（公开仓库）。
+#   · 显式写 owner/repo —— 本地 git remote 仍指向私有仓库 known_v1.0_React，
+#     不显式写会被 electron-builder 推断成私有仓库名，导致 latest.yml 404。
+#   · 发布流程：本地构建产物（安装包 + latest.yml + blockmap）手动上传 GitHub Releases。
+#   · 旧方案（自建 Caddy 服务器 /knowe-update/）退役。
+publish:
+  provider: github
+  owner: HirezmingD
+  repo: Knowe-agent-groupchat
+
+# 不签名（无证书）：跳过 SmartScreen 的代码签名校验阶段，后续如有证书再补
+# win.signAndEditExecutable: false

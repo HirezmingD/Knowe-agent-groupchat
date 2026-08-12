@@ -1,0 +1,56 @@
+"""Task-envelope persistence and user-facing completion projections."""
+
+from .contracts import normalize_relative_path, stable_identifier
+from .store import TaskEnvelopeStore
+from .completion import (
+    CompletionAwareTaskRunRepository,
+    CompletionCommitter,
+    CompletionConflict,
+    CompletionEvent,
+    CompletionStatus,
+    CompletionStatusPolicy,
+    completion_policy,
+    completion_scope_id,
+    CoordinatorAction,
+    DecisionEvent,
+    DecisionType,
+    InvalidCoordinatorDecision,
+    OutboxEntry,
+    OutboxState,
+    ProjectionKind,
+    SQLiteCompletionStore,
+    TaskJournalEntryV1,
+    TaskResultV1,
+    WaitToken,
+    classify_user_decision,
+)
+from .projections import CompletionProjector, ProjectionEffect, ProjectionFaultInjector
+
+__all__ = [
+    "CompletionAwareTaskRunRepository",
+    "CompletionCommitter",
+    "CompletionConflict",
+    "CompletionEvent",
+    "CompletionProjector",
+    "CompletionStatus",
+    "CompletionStatusPolicy",
+    "completion_policy",
+    "completion_scope_id",
+    "CoordinatorAction",
+    "DecisionEvent",
+    "DecisionType",
+    "InvalidCoordinatorDecision",
+    "OutboxEntry",
+    "OutboxState",
+    "ProjectionEffect",
+    "ProjectionFaultInjector",
+    "ProjectionKind",
+    "SQLiteCompletionStore",
+    "TaskEnvelopeStore",
+    "TaskJournalEntryV1",
+    "TaskResultV1",
+    "WaitToken",
+    "classify_user_decision",
+    "normalize_relative_path",
+    "stable_identifier",
+]

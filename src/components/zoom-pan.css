@@ -1,0 +1,91 @@
+/**
+ * zoom-pan.css — [v0.44 → v0.44.5 Bug2] 预览视口缩放/拖拽外壳（ZoomPan.tsx 专属）
+ * 摆放位置：src/components/zoom-pan.css
+ *
+ * [v0.44.5 Bug2] 工具区从「悬浮右上角」改为「标题栏下方的独立一行」：
+ *   静态占位、不遮挡正文；PDF 原生缩放（50/100/150/适应宽度）并入同一行，
+ *   不再出现两条重叠工具条。所有预览类型共用这一行。
+ */
+
+.zp-root { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── 统一工具行：静态排在预览顶部（标题栏下方），一行占位，不悬浮 ── */
+.zp-bar {
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+/* 左区：渲染器前导控件插槽（如 PDF 翻页）。空时不占视觉重量。 */
+.zp-bar-lead { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: wrap; }
+.zp-bar-spacer { flex: 1 1 auto; min-width: 8px; }
+/* 缩放区：渲染器原生缩放控件 或 本壳缩放簇，靠右。 */
+.zp-bar-zoom {
+  display: flex; align-items: center; gap: 2px;
+  flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end;
+}
+
+/* 本壳自带缩放簇：－ 百分比 ＋ | 抓手 | 复位（非 PDF 类型用） */
+.zp-btn {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px; background: transparent; color: var(--ink-2, var(--ink));
+  cursor: pointer; padding: 0;
+}
+.zp-btn:hover:not(:disabled) { background: var(--surface-sunken); }
+.zp-btn:disabled { opacity: .35; cursor: default; }
+.zp-btn.on { background: var(--accent); color: #fff; }
+
+.zp-pct {
+  min-width: 46px; height: 26px; border: none; border-radius: 6px; background: transparent;
+  color: var(--ink-2, var(--ink)); font-size: 12px; font-variant-numeric: tabular-nums;
+  cursor: pointer; padding: 0 4px;
+}
+.zp-pct:hover { background: var(--surface-sunken); }
+.zp-sep { width: 1px; height: 16px; background: var(--hairline); margin: 0 3px; }
+
+/* ── PDF 控件（portal 进统一工具行）── */
+.zp-pdf-nav { display: flex; align-items: center; gap: 2px; }
+.zp-pdf-navbtn {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px; background: transparent; color: var(--ink-2, var(--ink));
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 0;
+}
+.zp-pdf-navbtn:hover:not(:disabled) { background: var(--surface-sunken); }
+.zp-pdf-navbtn:disabled { opacity: .35; cursor: default; }
+.zp-pdf-page {
+  min-width: 56px; text-align: center; padding: 0 4px;
+  font-size: 12px; color: var(--ink-2, var(--ink));
+}
+
+/* 图片缩放控件（portal 进统一工具行，复用 .zp-btn/.zp-pct/.zp-sep 外观） */
+.zp-img-zoom { display: flex; align-items: center; gap: 2px; }
+
+.zp-pdf-zoom { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; justify-content: flex-end; }
+.zp-pdf-zbtn {
+  height: 26px; padding: 0 9px; border: none; border-radius: 6px; background: transparent;
+  color: var(--ink-2, var(--ink)); font-size: 12px; line-height: 1; cursor: pointer;
+  white-space: nowrap;
+}
+.zp-pdf-zbtn:hover { background: var(--surface-sunken); }
+.zp-pdf-zbtn.on { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* PDF 兜底行内工具条（仅在无 ZoomPan 外壳时用；正常路径走 portal，不渲染此块） */
+.pv-pdf-toolbar {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; border-bottom: 1px solid var(--hairline);
+}
+.pv-pdf-toolbar-spacer { flex: 1 1 auto; }
+
+/* 视口：100% 档保持原生滚动（行为与 v0.43 相同）；缩放档收掉滚动条改 transform */
+.zp-viewport { flex: 1; min-height: 0; overflow: auto; position: relative; }
+.zp-viewport.zoomed { overflow: hidden; }
+.zp-viewport.pan { cursor: grab; }
+.zp-viewport.pan.dragging { cursor: grabbing; user-select: none; }
+
+.zp-content { min-width: 100%; min-height: 100%; }
+.zp-viewport.zoomed .zp-content { width: max-content; min-width: 100%; }
+
+/* 缩放态透明拖拽膜（接住会被 iframe 吞掉的指针事件） */
+.zp-dragfilm { position: absolute; inset: 0; z-index: 2; }

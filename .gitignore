@@ -1,0 +1,52 @@
+# 密钥 & 环境
+.env
+.env.*
+*.pem
+*.key
+
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+out/
+release/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 运行时数据 & 日志
+backend/data/
+# [v1.0.20.3] 根目录运行时数据（会话库/事件流/token账本/Electron缓存）——非源码，不进版本库
+data/
+# [v1.0.25.1] 运行时日志（backend_YYYYMMDD.log）——程序自记流水账，非源码，不进版本库
+Logs/
+*.log
+*.sqlite3
+*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试
+.pytest_cache/
+coverage/
+htmlcov/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 打包
+*.zip
+*.tar.gz
+*.7z
+build/

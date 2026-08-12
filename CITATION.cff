@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Knowe"
+abstract: "A desktop application that turns AI agents into a team — command your agents through group chat, with a Coordinator splitting tasks and Workers executing them collaboratively."
+authors:
+  - family-names: "Jiang"
+    given-names: "Hezhou"
+    email: "jhezhou@gmail.com"
+keywords:
+  - "ai-agents"
+  - "multi-agent"
+  - "group-chat"
+  - "electron"
+  - "react"
+license: MIT
+date-released: "2026-08-12"

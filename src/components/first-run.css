@@ -1,0 +1,195 @@
+/*
+ * first-run.css — [v0.44.1 Bug3] 首启模型引导卡片
+ *
+ * 雾化遮罩 + 居中弹窗卡片，沿用 Knowe 的暖色设计语言。自带定位与配色（不依赖
+ * knowe-components.css 的变量表也能正确渲染，故全部颜色走 var(令牌, fallback)
+ * 双轨：令牌缺失时回退到本文件的暖色硬编码），内层表单沿用 settings-view.css 的
+ * .mset / .set-item / .field / .test-btn 等既有样式。
+ *
+ * [v1.0.24.2] 深色模式适配：浅色值作为 var() fallback，html.dark 时由令牌
+ * （--surface-raise/--ink/--ink-2/--success/--danger 等）接管；无令牌对应的
+ * 装饰色（分隔线、步骤底色、禁用态）用 html.dark 覆盖块补齐。
+ */
+
+.frg-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;                 /* 盖住浮层宿主(9000)、floatbar、DevDrawer */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(28, 24, 20, 0.28);
+  backdrop-filter: blur(14px) saturate(1.05);
+  -webkit-backdrop-filter: blur(14px) saturate(1.05);
+  pointer-events: auto;           /* 吃掉背景所有交互 */
+  animation: frg-fade 220ms ease both;
+}
+
+html.dark .frg-scrim { background: rgba(0, 0, 0, 0.5); }
+
+@keyframes frg-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.frg-card {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--surface-raise, #faf8f5);
+  color: var(--ink, #2a2521);
+  border: 1px solid var(--bd-soft, rgba(0, 0, 0, 0.06));
+  border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(28, 24, 20, 0.28), 0 2px 8px rgba(28, 24, 20, 0.12);
+  padding: 28px 28px 22px;
+  animation: frg-pop 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html.dark .frg-card {
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes frg-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.frg-head { margin-bottom: 18px; }
+
+.frg-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #b08752;
+  background: rgba(176, 135, 82, 0.12);
+  border-radius: 999px;
+  padding: 4px 12px;
+  margin-bottom: 12px;
+}
+
+html.dark .frg-badge {
+  color: #d8b878;
+  background: rgba(216, 184, 120, 0.14);
+}
+
+.frg-title {
+  font-size: 21px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--ink, #241f1a);
+}
+
+.frg-sub {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--ink-2, #6a635b);
+  margin: 0 0 16px;
+}
+
+.frg-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-3, #9a938a);
+}
+
+.frg-step {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.04);
+  white-space: nowrap;
+}
+html.dark .frg-step { background: rgba(255, 255, 255, 0.07); }
+
+.frg-step.on {
+  color: #7a5a2e;
+  background: rgba(176, 135, 82, 0.16);
+  font-weight: 600;
+}
+html.dark .frg-step.on {
+  color: #d8b878;
+  background: rgba(216, 184, 120, 0.16);
+}
+
+.frg-step.done {
+  color: var(--success, #4a7a4a);
+  background: var(--success-bg, rgba(74, 122, 74, 0.14));
+}
+/* 特异性兜底：html.dark .frg-step (0,2,1) 高于 .frg-step.done (0,2,0)，
+   不加前缀会被其 background 覆盖（实测踩坑），故 done 同样加 html.dark 前缀 */
+html.dark .frg-step.done {
+  color: var(--success, #4a7a4a);
+  background: var(--success-bg, rgba(74, 122, 74, 0.14));
+}
+.frg-arrow { color: #cfc7bc; }
+html.dark .frg-arrow { color: rgba(255, 255, 255, 0.28); }
+
+.frg-body {
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  padding-top: 16px;
+}
+html.dark .frg-body { border-top-color: rgba(255, 255, 255, 0.08); }
+
+.frg-test {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.frg-result {
+  font-size: 12.5px;
+  color: var(--ink-3, #8a837a);
+  flex: 1;
+  min-width: 160px;
+}
+.frg-result.ok  { color: var(--success, #3f8f52); }
+.frg-result.err { color: var(--danger, #c0553f); }
+
+.frg-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+html.dark .frg-foot { border-top-color: rgba(255, 255, 255, 0.08); }
+
+.frg-enter {
+  min-width: 140px;
+  font-weight: 600;
+  padding: 9px 22px;
+  border-radius: 10px;
+  background: #b08752;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 140ms ease, opacity 140ms ease;
+  /* 文字横竖居中：继承 line-height 会让「进入 Knowe」视觉下偏 */
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.frg-enter:hover:not(:disabled) { background: #9c7444; }
+.frg-enter:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: #b8b0a5;
+}
+html.dark .frg-enter:disabled { background: rgba(255, 255, 255, 0.18); }
+
+/* ── [v1.0.21.3] 首启卡上的主要语言模块 ── */
+.frg-lang {
+  /* 左右零缩进：语言区左缘与上方 .frg-step 左缘对齐（同卡片 28px） */
+  padding: 10px 0 0;
+  border-top: 1px dashed var(--bd-soft, #d8d2c8);
+  margin-top: 4px;
+}
+html.dark .frg-lang { border-top-color: rgba(255, 255, 255, 0.1); }

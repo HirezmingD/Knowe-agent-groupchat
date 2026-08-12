@@ -1,0 +1,33 @@
+{
+  // Electron 侧（main + preload）单独的一份 TS 配置。
+  // 和渲染进程那份（根 tsconfig.json，DOM 环境）分开：这边是 Node 环境，
+  // 不需要 DOM lib，也不走 react-jsx。typecheck 脚本会单独跑这份：
+  //   tsc --noEmit -p electron/tsconfig.json
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    // 只显式声明 node 全局；electron 的类型随 `import ... from 'electron'` 自然带入，
+    // 不塞进 types 数组——那条路径的解析比 import 更挑剔，真实装了 electron 也可能
+    // 报 TS2688，不如让它走 import 这条稳的。
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+
+    // 只做类型检查，产物交给 electron-vite（esbuild）出，这里不 emit。
+    "noEmit": true
+  },
+  // 本目录下的 *.ts，外加共享的桥契约（主进程/preload 都 import 它）。
+  "include": ["*.ts", "../src/shared/bridge.ts"],
+  "exclude": ["node_modules"]
+}

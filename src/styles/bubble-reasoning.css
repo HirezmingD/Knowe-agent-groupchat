@@ -1,0 +1,444 @@
+/* ═══════════════════════════════════════════════════════════════
+ * bubble-reasoning.css — [v1.0.23.3] 推理折叠面板 + 四方向建议卡片
+ *
+ * 照【权威参考】apple_agent_bubble(1).html，色值全部换成 Knowe 设计令牌
+ * （见 PRD §4.2 映射表）。深浅色 = html.dark class 切换，令牌自动适配，
+ * 不写 @media (prefers-color-scheme)。
+ * ═══════════════════════════════════════════════════════════════ */
+
+/* ── 推理折叠面板 ─────────────────────────────────────────── */
+
+.reasoning {
+  overflow: hidden;
+  animation: r-rise 0.72s 0.02s var(--ease-out) both;
+}
+
+.reasoning-trigger {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 10px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.reasoning-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* [v1.0.23.3 修订] 标题与副标题同一行、水平隔开一点（不换行） */
+.reasoning-left > span:last-child {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.thinking-dot {
+  /* [v1.0.23.7] 7px 静态圆点 → morphing-infinity SVG 动画（21st.dev）。
+     [v1.0.23.8] 绿(--success) → 蓝(--info)；尺寸 ×1.3（16px→20.8px）；
+     margin-left 2px 右移保险（bubble padding 12px 16px 本已足够，
+     右侧 gap 10px 不挡字）。stroke 用 currentColor + color 令牌。
+     [v1.0.23.9] 尺寸 ×1.5（20.8px→31.2px，用户视觉意见）。 */
+  width: 31.2px;
+  height: 31.2px;
+  margin-left: 2px;
+  color: var(--info);
+  flex: 0 0 auto;
+  display: inline-block;
+}
+.thinking-dot path {
+  stroke-width: 1.5;
+}
+
+.reasoning-title {
+  font-size: 13.5px;  /* [v1.0.23.3 修订] 15px × 0.9 */
+  font-weight: 630;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.reasoning-sub {
+  font-size: 11.25px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reasoning .chev {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  transition: transform 0.52s var(--ease-inout);
+  flex: 0 0 auto;
+}
+.reasoning.collapsed .chev { transform: rotate(-90deg); }
+
+.reasoning-panel {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  /* [v1.0.23.8] 浅色圆角矩形底：--surface-raise 比气泡底 --surface-2
+     明度亮一点点、色相同为暖中性——和谐不跳；深色模式令牌自动适配。 */
+  background: var(--surface-raise);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+  transition: grid-template-rows 0.56s var(--ease-inout), opacity 0.24s ease, padding 0.56s var(--ease-inout);
+}
+.reasoning.collapsed .reasoning-panel {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  /* [v1.0.23.9] 折叠后占用空间减半：padding 上下 8px→4px，
+     避免折叠态 + 空正文叠成一大片空白（用户视觉意见）。 */
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.reasoning-clip {
+  overflow: hidden;
+  /* [v1.0.24.3] grid 折叠动画的前提：子项 min-height:0 才能被 1fr→0fr 收缩。
+     缺了它，grid item 会撑住内容高度，折叠动画退化成 opacity 淡出（无高度 morph）。 */
+  min-height: 0;
+}
+
+.reasoning-scroll {
+  max-height: 190px;
+  overflow: auto;
+  padding: 2px 8px 2px 16px;
+  position: relative;
+  /* [v1.0.23.5_2] contain: layout style —— 推理内容重排不外溢到气泡/消息列表 */
+  contain: layout style;
+  /* [v1.0.23.3 修订] 去掉 scroll-behavior: smooth——smooth 模式下编程式
+     scrollTop 赋值被吞（动画反复打断 → 滚动条钉死最上方、无法手动滚动，
+     实测 set200 立即读回 0）。流式跟随必须即时跳转。 */
+}
+.reasoning-scroll::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 999px;
+  /* [v1.0.23.8] 中性灰半透明（配合 --surface-raise 底，色相和谐） */
+  background: linear-gradient(to bottom, rgba(60, 60, 67, 0.06), rgba(60, 60, 67, 0.22), rgba(60, 60, 67, 0.06));
+}
+html.dark .reasoning-scroll::before {
+  background: linear-gradient(to bottom, rgba(235, 235, 245, 0.06), rgba(235, 235, 245, 0.22), rgba(235, 235, 245, 0.06));
+}
+.reasoning-scroll::-webkit-scrollbar { width: 8px; }
+.reasoning-scroll::-webkit-scrollbar-thumb { background: rgba(60, 60, 67, 0.22); border-radius: 999px; }
+.reasoning-scroll::-webkit-scrollbar-track { background: transparent; }
+.reasoning-scroll p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13.5px;  /* [v1.0.23.3 修订] 15px × 0.9 */
+  line-height: 1.62;
+}
+/* [v1.0.23.3 修订] 段落间距（Markdown 每段一个 .md 容器；10px → 6px） */
+.reasoning-scroll .md + .md { margin-top: 6px; }
+/* [v1.0.23.5 修订] 段落出现不再淡入（用户否决：行级 0.42s 淡入视觉=「闪现」）。
+   照 21st thinking-reasoning（tr-sentence）的观感：文字直接出现、不闪，
+   动感全部交给 .reasoning-stream 的 0.56s translateY 上推。 */
+.reasoning-scroll .md {
+  animation: none;
+}
+
+/* [v1.0.23.4 修订] 流式期间：无滑动条 + 视口裁切（新进老出）。
+   视口约 5 段（300px）；内容整体上推，最老段落滑出视口。
+   [v1.0.23.5 修订] 移除上下 18px 渐变遮罩——用户否决：遮罩把正常文字淡没了。 */
+.reasoning-scroll.live {
+  /* [v1.0.23.6-r2] overflow: hidden → clip（关键修复）：
+     hidden 在 Chromium 里仍是滚动容器（无滚动条但吞滚轮）——推理内容可达
+     数千 px、视口仅 300px，鼠标悬停推理面板滚轮会被内部消费，聊天区域
+     滑块永远滚不动（用户实测「被流式推理跟随捕捉」）。clip 不是滚动容器：
+     滚轮事件穿透到 .msgs，视觉裁切完全一致，live 上推靠 transform 不受影响。 */
+  overflow: clip;
+  max-height: 300px;
+  /* [v1.0.23.6] 高度 morph：显式像素高度（ResizeObserver 驱动）平滑过渡，
+     流式内容增长不再瞬间撑开 bubble——慢速连续变形，用户视觉舒适优先 */
+  transition: height 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* 流式队列上推动画载体（照参考 tr-stream transition .56s） */
+.reasoning-stream {
+  will-change: transform;
+  transition: transform 0.56s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* 落定瞬间：立即回到顶部显示全部（无过渡，滚动条接管） */
+.reasoning-scroll:not(.live) .reasoning-stream {
+  transition: none;
+}
+/* [v1.0.23.3 修订] 推理内 Markdown 列表/强调（星号、短横线不再裸露） */
+.reasoning-scroll ul,
+.reasoning-scroll ol {
+  margin: 2px 0 0;
+  padding-left: 1.4em;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.62;
+}
+.reasoning-scroll li { margin: 1px 0; }
+.reasoning-scroll strong { font-weight: 630; }
+
+/* ── [v1.0.23.3 修订] 三段同气泡 ─────────────────────────────
+   推理面板 + 正文 + 建议卡片同处 .bubble.agent 壳内。
+   正文上方照参考 .answer 的分隔线（推理存在时才加）。 */
+
+.bubble.agent .reasoning + .bubble-body-wrap {
+  /* [v1.0.23.9] 顶部空白减半：margin/padding 16px→8px（用户视觉意见）。
+     推理面板底 → 8px → 分隔线 → 8px → 正文。 */
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* 气泡内折叠时（正文折叠），分隔线保留在推理下方——不受 .bubble-body 高度裁剪影响 */
+/* [v1.0.23.4] 流式期间（正文未出现）不分隔 */
+.bubble.streaming .bubble-body-wrap {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* ── [v1.0.23.4 修订] 统一壳：streaming 也是 bubble agent tail ──
+   全程不换壳：三点小胶囊 → 推理展开（max-width/height morph）→ 落定正文/卡片
+   向下 morph 展开。消除 typing-bubble → tail 的 DOM 切换跳闪。 */
+
+/* 三点态：小胶囊（宽 104px / 高 52px，内容裁切） */
+.bubble.agent.streaming {
+  overflow: hidden;
+  width: 104px;
+  max-width: 104px;
+  max-height: 52px;
+}
+/* [v1.0.24.4] ★ 推理开始【向右变形】（104→640）与落定【向左变形】（640→自然宽）
+   统一 morph 动效：慢→快→慢（用户点名，原 easeOutQuint 0.5s 快起被批「没有动画感」）。
+   [v1.0.24.4-r2] 时长 2s → 1s（用户实测「2秒太慢」）。
+   [v1.0.24.4-r3] 1s → 0.8s（用户再次实测微调）。
+   过渡挂在基础 .bubble.agent 上：streaming↔落定切换时 max-width 目标值变化即触发；
+   窗口缩放不改变声明值（100%→100%），不会误触发。 */
+.bubble.agent {
+  transition:
+    max-width 800ms cubic-bezier(0.77, 0, 0.175, 1),
+    max-height 800ms cubic-bezier(0.77, 0, 0.175, 1);
+}
+/* 推理到达：morph 展开到流式宽度（max-width/height 过渡 + 内容淡入） */
+.bubble.agent.streaming.has-reasoning {
+  width: auto;
+  max-width: 640px;
+  max-height: 460px;
+}
+.bubble.agent.streaming .reasoning {
+  animation: r-stream-fade 0.45s 0.12s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes r-stream-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* 落定：壳恢复正常形态（max-width/height 由基础规则接管，无过渡瞬态由 wrap 动画承载） */
+.bubble.agent:not(.streaming) {
+  overflow: visible;
+}
+
+/* 正文 / 建议卡片：wrap 恒渲染，grid-rows 0fr↔1fr 过渡 = 向下 morph 展开（无跳闪） */
+.bubble-body-wrap,
+.bubble-after-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.bubble-body-wrap.is-empty,
+.bubble-after-wrap.is-empty {
+  grid-template-rows: 0fr;
+}
+.bubble-body-wrap > *,
+.bubble-after-wrap > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 落定瞬间：推理面板从 live 队列平滑回顶（.3s 过渡，配合正文展开不突兀） */
+.reasoning-scroll:not(.live) .reasoning-stream {
+  transition: transform 0.3s ease;
+}
+
+/* ── [v1.0.23.3 修订] typing-bubble 显示推理流式 ─────────────
+   有推理：推理面板独占气泡（column 布局、占满宽度）；
+   无推理：三点动画居中（原「正在输入中」文案已移除）。 */
+
+.bubble.typing-bubble.has-reasoning {
+  display: block;
+  padding: 14px var(--space-4);
+}
+.bubble.typing-bubble:not(.has-reasoning) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px var(--space-4);
+  min-height: 20px;
+}
+.bubble.typing-bubble:not(.has-reasoning) .typing-dots { margin-top: 0; }
+
+/* ── 四方向建议卡片 ───────────────────────────────────────── */
+
+.suggestions {
+  margin-top: 18px;
+  /* [v1.0.23.3 修订] 柔和下拉入场（600ms 慢节奏），不「闪现」 */
+  animation: r-drop 0.6s var(--ease-out) both;
+  overflow: hidden;
+  transform-origin: center top;
+  transition:
+    max-height 0.48s var(--ease-inout),
+    margin-top 0.48s var(--ease-inout),
+    opacity 0.3s ease,
+    transform 0.48s var(--ease-inout);
+}
+
+.suggestions.consuming {
+  animation: none;
+  pointer-events: none;
+  max-height: 0 !important;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+}
+
+.suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.suggestion {
+  position: relative;
+  appearance: none;
+  border: 0;
+  min-height: 82px;
+  border-radius: 15px;
+  text-align: left;
+  padding: 14px 15px 13px;
+  color: var(--ink);
+  /* [v1.0.23.3 修订] 卡片在气泡内（.bubble.agent = --surface-2）需有层次：
+     卡片用 --surface（浅色下白、深色下更暗），hover 用阴影+光环强调 */
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    transform 0.42s var(--ease-inout),
+    box-shadow 0.28s var(--ease-out),
+    background 0.24s ease,
+    opacity 0.28s ease,
+    filter 0.28s ease,
+    height 0.38s var(--ease-inout),
+    margin 0.38s var(--ease-inout),
+    padding 0.38s var(--ease-inout);
+  will-change: transform;
+}
+
+.suggestion::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(180px circle at var(--x, 50%) var(--y, 50%), rgba(0, 122, 255, 0.12), transparent 45%);
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+.suggestion:hover {
+  transform: translateY(-2px) scale(1.012);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--accent-ring), 0 10px 22px var(--shadow-1);
+}
+.suggestion:hover::before { opacity: 1; }
+.suggestion:active { transform: scale(0.975); }
+.suggestion:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 2px; }
+
+.suggestions.consuming .suggestion {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-7px) scale(0.94);
+  filter: blur(4px);
+}
+.suggestions.consuming .suggestion:nth-child(1) { transition-delay: 0ms; }
+.suggestions.consuming .suggestion:nth-child(2) { transition-delay: 35ms; }
+.suggestions.consuming .suggestion:nth-child(3) { transition-delay: 70ms; }
+.suggestions.consuming .suggestion:nth-child(4) { transition-delay: 105ms; }
+
+.suggestion-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 630;
+  line-height: 1.42;
+  letter-spacing: -0.01em;
+}
+.suggestion-sub {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+
+/* ── [v1.0.23.3 修订] 落定 morph：typing 小框 → 落定大框 ────────────
+   流式定格的气泡挂 .morph-in：从 typing-bubble 的视觉特征（矮、窄、半透明）
+   向下/向右平滑扩大到完整气泡，正文随之显现（不闪烁替换）。 */
+
+.bubble.agent.morph-in {
+  animation: r-bubble-morph 0.6s var(--ease-out) both;
+  transform-origin: left top;
+}
+@keyframes r-bubble-morph {
+  from {
+    opacity: 0.45;
+    transform: scale(0.96, 0.55) translateY(6px);
+    /* [v1.0.24.6-P3] 去掉 blur：filter:blur 动画每帧触发整块重 paint（GPU 无法合成），
+       0.6s morph 期间 blur(2px)→0 的视觉增益极小，去掉后 transform+opacity 全走合成器。 */
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── 入场动画（照参考 rise） ─────────────────────────────── */
+
+@keyframes r-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* [v1.0.23.3 修订] 卡片柔和下拉（600ms 慢节奏） */
+@keyframes r-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .suggestions-grid { grid-template-columns: 1fr; }
+  .reasoning-scroll { max-height: 170px; }
+}

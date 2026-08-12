@@ -1,0 +1,210 @@
+/**
+ * role-picker.css — [主动拉入worker] 职能选择区样式
+ *
+ * 来源：Logs/v1.0.23.2 主动拉入worker列表/Knowe-New-Project-Grid-List.html
+ *   （grid-list 3 列职能网格 + forced-row + scope-row + role-note）
+ * 令牌一律走项目 var()，不写死色值。
+ */
+
+.rp { min-width: 0; }
+
+.scope-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 8px;
+}
+
+.pf-scope {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.selection-summary {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 项目经理自动加入行（不含头像，勾选态不可取消） */
+.forced-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--accent-tint);
+}
+
+.forced-row .fr-nm {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.forced-row .pick-check,
+.grid-list-item[aria-selected="true"] .pick-check {
+  border-color: var(--fill);
+  color: var(--fill-ink);
+  background: var(--fill);
+}
+
+/* 职能网格（4 列 6 行，React Aria GridList 风格；[20260805] 3列8行→4列6行，
+   行高/gap 按用户要求乘 0.8：42px→33.6px、6px→4.8px，整卡高度随之收窄） */
+.grid-list {
+  width: 100%;
+  height: 240px; /* 4 列 × 6 行 = 24 职能全部显示，无需滚动 */
+  padding: 7px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 33.6px;
+  gap: 4.8px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  outline: none;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.grid-list-item {
+  width: 100%;
+  height: 33.6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 7px;
+  outline: none;
+  background: transparent;
+  cursor: default;
+  user-select: none;
+  text-align: left;
+  font-size: 13px;
+  line-height: 18px;
+  transition: background 120ms var(--ease-out), color 120ms var(--ease-out),
+    transform 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
+}
+
+.grid-list-item:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.grid-list-item[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--accent-tint);
+}
+
+.grid-list-item:active:not(:disabled) { transform: scale(0.985); }
+
+.grid-list-item:focus-visible {
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ring);
+}
+
+.grid-list-item:disabled { opacity: 0.55; cursor: default; }
+
+.grid-list-item .role-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: currentColor;
+  font-weight: 500;
+}
+
+.pick-check {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: transparent;
+  background: var(--surface);
+  transition: background 140ms var(--ease-out), border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+
+.grid-list-item .pick-check {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
+  border-radius: 5px;
+}
+
+/* 网格底部淡出遮罩（暗示可滚动） */
+.flex.w-full.justify-center.relative::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 11px;
+  bottom: 1px;
+  height: 12px;
+  border-radius: 0 0 9px 9px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+}
+
+.grid-list::-webkit-scrollbar { width: 10px; }
+.grid-list::-webkit-scrollbar-track { background: transparent; }
+.grid-list::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgba(33, 31, 28, 0.13);
+  background-clip: content-box;
+}
+.grid-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(33, 31, 28, 0.22);
+  background-clip: content-box;
+}
+
+/* 说明文字 */
+.role-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0 14px;
+  color: var(--ink-3);
+  font-size: 13.8px;
+  line-height: 18px;
+}
+
+.role-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+@media (max-width: 520px) {
+  .grid-list {
+    height: 240px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-rows: 33.6px;
+    gap: 4.8px;
+  }
+  .grid-list-item { padding-left: 7px; padding-right: 6px; font-size: 12px; gap: 5px; }
+  .grid-list-item .pick-check { width: 16px; height: 16px; flex-basis: 16px; }
+  .grid-list-item .pick-check svg { width: 11px; height: 11px; }
+}

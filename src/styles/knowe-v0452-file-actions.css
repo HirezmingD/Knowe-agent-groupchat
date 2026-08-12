@@ -1,0 +1,118 @@
+/* v0.45.2 · 文件位置操作
+ * 尺寸、圆角、色阶和动效直接沿用 Knowe-UI_v1.3 的 .icon-btn 语言：
+ * 默认 ink-2/3，hover surface-2 + ink，active 0.95，短促 ease-out。
+ */
+
+.file-card[role='button'] {
+  position: relative;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.file-card[role='button']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--accent-ring);
+}
+
+.fc-reveal,
+.pv-reveal-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--ink-3);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out),
+    transform var(--dur-micro) var(--ease-out),
+    opacity var(--dur-micro) var(--ease-out);
+}
+
+.fc-reveal {
+  width: 28px;
+  height: 28px;
+  margin-inline: var(--space-1) var(--space-2);
+  opacity: .64;
+}
+
+.file-card:hover .fc-reveal,
+.file-card:focus-within .fc-reveal,
+.fc-reveal:hover,
+.pv-reveal-btn:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+  opacity: 1;
+}
+
+.fc-reveal:active,
+.pv-reveal-btn:active {
+  transform: scale(.95);
+}
+
+.fc-reveal:focus-visible,
+.pv-reveal-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+  opacity: 1;
+}
+
+.fc-reveal.busy,
+.pv-reveal-btn.busy {
+  opacity: .56;
+  pointer-events: none;
+}
+
+.fc-reveal.busy svg,
+.pv-reveal-btn.busy svg {
+  animation: knowe-file-action-pulse 900ms var(--ease-out) infinite alternate;
+}
+
+@keyframes knowe-file-action-pulse {
+  to { transform: translateY(-1px); opacity: .45; }
+}
+
+.fc-reveal-error {
+  position: absolute;
+  z-index: 8;
+  right: var(--space-2);
+  top: calc(100% + var(--space-1));
+  max-width: min(300px, 72vw);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  color: var(--danger, #b94747);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: normal;
+  animation: menuIn var(--dur-base) var(--ease-out) both;
+}
+
+.pv-reveal-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pv-reveal-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.pv-reveal-error {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger, #b94747);
+  font-size: 12px;
+  line-height: 18px;
+}

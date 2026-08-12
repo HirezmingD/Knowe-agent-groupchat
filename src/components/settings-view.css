@@ -1,0 +1,275 @@
+/**
+ * settings-view.css — [v0.44] 设置视图样式
+ *
+ * 摆放位置：src/components/settings-view.css（由 SettingsView.tsx import，
+ * 与 KnowledgeView 的 knowledge-view.css 同款就近习惯）。
+ *
+ * §一：.set-nav / .set-pane / .set-block / .set-item / .switch / .test-btn / .test-res /
+ * .spinner 的骨架规则**逐条照抄参考 HTML v1.3 的设置区域**（值一致，全局 CSS 若已有
+ * 同名规则也不会打架）。.mset / .set-avatar / fs-large 是 v0.44 新增。
+ * .field 已在全局 CSS 存在（ContactsView 在用），此处不重复定义。
+ */
+
+/* ── 参考 HTML §设置页（1180–1212 行）原样骨架 ── */
+
+/* [v1.0.24.2] 深色模式补丁：以下令牌在设计令牌表（knowe-tokens.css）中不存在，
+   本文件用 var(名, fallback) 时深色下会恒走浅色 fallback（如黑字 #2b2b2b 落
+   在深色下拉框上不可读）。此处按令牌表深色语义补定义，浅色不受影响。 */
+html.dark {
+  --tx-strong: #ECEAE4;          /* = --ink 深色：文字主色 */
+  --tx-weak: #8F8D85;            /* = --ink-3 深色：文字弱色 */
+  --surface-1: #2B2A26;          /* = --surface-2 深色：浮层/下拉框背景 */
+  --bd-soft: rgba(255, 255, 255, 0.1); /* 柔和分隔线 */
+}
+
+.set-nav { width: 220px; flex-shrink: 0; padding: var(--space-6) var(--space-3); }
+.set-nav .navrow { padding: 9px var(--space-3); }
+.set-pane { flex: 1; overflow-y: auto; padding: var(--space-8) var(--space-10); }
+.set-pane h2 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin-bottom: var(--space-6); }
+.set-block { max-width: 560px; margin-bottom: var(--space-8); }
+.set-block h4 { font-size: 12px; font-weight: 600; color: var(--ink-3); letter-spacing: .02em; margin-bottom: var(--space-3); }
+.set-item { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) 0; min-width: 0; }
+/* [v0.44.5 Bug1] 左侧标签列给一个可读下限：无论右侧控件/文字多长，
+   标签都不会被压成「每字一行」的竖排。本页控件都 ≤ 300px，120px 下限不会溢出。 */
+.set-item .si-body { flex: 1 1 auto; min-width: 120px; }
+.set-item .si-t { font-size: 14px; line-height: 20px; color: var(--ink); overflow-wrap: anywhere; }
+.set-item .si-d { font-size: 12px; line-height: 18px; color: var(--ink-3); margin-top: 1px; overflow-wrap: anywhere; }
+/* 右侧控件列自身允许收窄，其内部长文字（如错误提示）就地换行而不外扩挤压左列。 */
+.set-ctrl { flex-shrink: 0; min-width: 0; max-width: 100%; }
+.set-ctrl > * { max-width: 100%; }
+
+.switch { width: 42px; height: 24px; border-radius: 12px; background: var(--surface-sunken); position: relative; cursor: pointer; transition: background var(--dur-base) var(--ease-out); flex-shrink: 0; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-1); transition: transform var(--dur-base) var(--ease-out); }
+.switch.on { background: var(--accent); }
+.switch.on::after { transform: translateX(18px); }
+
+.test-btn { height: 32px; padding: 0 var(--space-4); border-radius: var(--r-sm); background: var(--surface-2); color: var(--ink); font-size: 13px; font-weight: 500; transition: background var(--dur-micro); border: none; cursor: pointer; }
+.test-btn:hover { background: var(--surface-sunken); }
+.test-btn:disabled { opacity: .45; cursor: default; }
+.test-res { font-size: 12px; margin-left: var(--space-3); }
+.test-res.ok { color: var(--success); }
+.test-res.err { color: var(--danger); }
+.spinner { width: 14px; height: 14px; border: 2px solid var(--hairline); border-top-color: var(--ink-3); border-radius: 50%; animation: knowe-set-spin .8s linear infinite; display: inline-block; vertical-align: -2px; }
+@keyframes knowe-set-spin { to { transform: rotate(360deg); } }
+
+/* ── [v0.44] 模型绑定模块（设置页 + Worker/主管资料页共用）── */
+
+.mset { border: 1px solid var(--hairline); border-radius: var(--r-md, 10px); padding: 2px var(--space-4); }
+.mset .set-item + .set-item { border-top: 1px solid var(--hairline); }
+.mset-field { min-width: 240px; max-width: 320px; }
+/* 提供商/模型自定义下拉（原生 select 的 option 放不了国旗图片，故用 div 模拟） */
+.mset-select { position: relative; min-width: 240px; max-width: 320px; }
+.mset-select-trigger { width: 100%; cursor: pointer; text-align: left; }
+.mset-select-trigger:disabled { cursor: default; }
+.mset-select-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mset-select-caret { margin-left: auto; font-size: 11px; color: var(--ink-3); line-height: 1; }
+.mset-select-list { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60; background: var(--surface-1, var(--surface, #fff)); border: 1px solid var(--hairline); border-radius: var(--r-md, 10px); box-shadow: 0 10px 28px rgba(0, 0, 0, .14); padding: 4px; max-height: 300px; overflow-y: auto; }
+.mset-select-opt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mset-select-opt:hover { background: var(--surface-2); }
+.mset-select-opt.sel { background: var(--surface-2); color: var(--accent); font-weight: 600; }
+.mset-flag { width: 18px; height: 12px; border-radius: 2px; flex-shrink: 0; object-fit: cover; }
+.mset-flag-globe { font-size: 12px; line-height: 1; flex-shrink: 0; }
+.mset-select-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mset-field input { flex: 1; background: transparent; border: none; outline: none; font-size: 13px; color: var(--ink); min-width: 0; }
+/* ④ 封存态：三个框整体变灰、不可修改（disabled 之外再压一层视觉） */
+.mset.sealed .field { opacity: .55; pointer-events: none; background: var(--surface-2); }
+.mset.sealed .si-t, .mset.sealed .si-d { color: var(--ink-3); }
+.mset-actions { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; }
+/* [v1.0.24.1] 确认后自动测试连接的结果：按钮右侧，多行换行、不挤压、不超界、最多 3 行省略 */
+.mset-test-res { flex: 1; min-width: 0; font-size: 12px; line-height: 18px; color: var(--ink-2);
+  white-space: pre-line; word-break: break-word; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.mset-test-res.testing { color: var(--ink-3); }
+.mset-test-res.ok { color: var(--success); }
+.mset-test-res.err { color: var(--danger); }
+.mset-ok:not(:disabled) { background: var(--accent); color: #fff; }
+.mset-ok:not(:disabled):hover { background: var(--accent); opacity: .9; }
+.mset-follow { font-size: 12px; color: var(--ink-3); padding: 6px 0 0; }
+.mset-testrow { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+
+/* [v0.44.5 Bug1] 连接测试结果/错误：整行独占、整块换行，永不横向抢占标签列的宽度。 */
+.test-res-line {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: var(--space-2) 0 2px;
+  font-size: 12px; line-height: 18px; color: var(--ink-2);
+  overflow-wrap: anywhere; word-break: break-word;
+}
+.test-res-line.ok { color: var(--success); }
+.test-res-line.err { color: var(--danger); }
+.test-res-line .test-res-msg { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+/* 旧的行内 .test-res 仍保留为安全兜底：即便被复用也会换行而非撑破布局。 */
+.test-res { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+
+.set-note { font-size: 12px; line-height: 18px; color: var(--ink-3); margin: 4px 0 8px; }
+.mset-key-status {
+  margin: 8px 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+.mset-key-clear {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+.set-restart-banner {
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: calc(-1 * var(--space-2)) 0 var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warning, #b7791f);
+  border-radius: var(--r-md, 10px);
+  background: var(--surface-2);
+}
+.set-restart-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-2, var(--ink));
+}
+.set-restart-copy strong { font-size: 13px; color: var(--ink); }
+.set-restart-btn { flex-shrink: 0; }
+.set-link { color: var(--accent); text-decoration: none; font-size: 13px; }
+.set-link:hover { text-decoration: underline; }
+.set-author { max-width: 460px; }
+
+/* ── [v0.44] 账户与身份：头像 ── */
+
+.set-acct-row { display: flex; align-items: center; gap: var(--space-4); }
+.set-avatar { width: 64px; height: 64px; border-radius: 50%; overflow: hidden; border: 1px solid var(--hairline); background: var(--surface-sunken); cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.set-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.set-avatar-glyph { font-size: 24px; color: var(--ink-2, var(--ink)); }
+.set-avatar:hover { box-shadow: 0 0 0 3px var(--accent-ring, rgba(75, 90, 140, .25)); }
+
+/* Rail 头像挂真图时的裁切（rail-me 原来只装单字 glyph） */
+.rail-me img.rail-me-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+
+/* ── [v0.44] 群资料页 / Agent 资料页里的新设置行 ── */
+
+.pf-setrow { display: flex; align-items: center; gap: var(--space-4); padding: 8px 0; }
+.pf-setrow .pf-setlabel { flex: 1; min-width: 0; }
+.pf-setrow .pf-setlabel .si-t { font-size: 14px; color: var(--ink); }
+.pf-setrow .pf-setlabel .si-d { font-size: 12px; color: var(--ink-3); margin-top: 1px; }
+
+/* ── [v0.44] 字号「大」：全局文字放大约 1.15 倍 ──
+ *
+ * README §2.4：影响范围包括消息气泡内的文字，但**不影响预览窗口中的文字**。
+ * 做法：对主要文字载体逐类放大（14→16 / 13→15 / 12→13）；预览面板
+ * （.preview-body / .kn-preview-body / .fav-preview-body）里的一律豁免。
+ */
+
+.desk.fs-large :is(.bubble, .bubble-body, .cname, .navrow-nm, .si-t, .pf-nm,
+    .stage-h1, .card-title, .sys-line, .composer textarea, .chat-title
+  ):not(:is(.preview-body, .kn-preview-body, .fav-preview-body) *) {
+  font-size: 16px;
+}
+
+.desk.fs-large :is(.cprev, .card-body, .pf-kv .k, .pf-kv .v, .field, select.field,
+    .test-btn, .drill, .dm-member-name
+  ):not(:is(.preview-body, .kn-preview-body, .fav-preview-body) *) {
+  font-size: 15px;
+}
+
+/* ── [v1.0.23.4] 关于页：字号 ×1.1 + 行距呼吸（仅 .about-pane 作用域，不影响其他设置分区）── */
+.about-pane h4 { font-size: 13.2px; line-height: 1.5; margin-bottom: var(--space-4); }
+.about-pane .set-item { padding: var(--space-4) 0; }
+.about-pane .si-t { font-size: 15.4px; line-height: 24px; }
+.about-pane .si-d { font-size: 13.2px; line-height: 22px; }
+.about-pane .set-link { font-size: 14.3px; }
+.about-pane .navrow-tag { font-size: 12.1px; line-height: 18px; }
+.about-pane .test-btn { font-size: 14.3px; height: 36px; }
+
+.desk.fs-large :is(.si-d, .cmeta, .ctime, .card-meta, .param-note, .set-note,
+    .m-time, .navrow-cnt, .pf-role, .dm-member-role, .fwd-quote-h, .mset-follow
+  ):not(:is(.preview-body, .kn-preview-body, .fav-preview-body) *) {
+  font-size: 13px;
+}
+
+/* ── [v0.44] 深色模式：只留接口（README §2.4）。
+ * App.tsx 在 appearance==='dark' 时给 .desk 挂 theme-dark 类；
+ * 具体的深色变量表下一版本再填——此处刻意留空，UI 不会有半成品的黑。 */
+.desk.theme-dark { /* 深色变量表 · 下一版本实现 */ }
+
+/* ── [v1.0.21.3] 主要语言模块（PrimaryLanguageModule）── */
+.plm { padding: 14px 0 6px; }
+.plm-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--tx-strong, #2b2b2b);
+}
+.plm-options {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.plm-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--bd-soft, #d8d2c8);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  background: transparent;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.plm-option input { accent-color: #b08752; margin: 0; }
+.plm-option.plm-active {
+  border-color: #b08752;
+  background: rgba(176, 135, 82, 0.08);
+}
+.plm-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.plm-apply {
+  padding: 6px 18px;
+  border-radius: 8px;
+  border: none;
+  background: #b08752;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 140ms ease, opacity 140ms ease;
+}
+.plm-apply:hover:not(:disabled) { background: #9c7444; }
+.plm-apply:disabled { opacity: 0.45; cursor: not-allowed; }
+.plm-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tx-weak, #8a8578);
+}
+/* 紧凑模式（首启卡）：去掉标题留白，更小间距；语言按钮与 Apply 并排成一行 */
+.plm-compact {
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.plm-compact .plm-options { margin-bottom: 0; }
+.plm-compact .plm-option { padding: 5px 12px; font-size: 12px; }
+.plm-compact .plm-apply { padding: 5px 14px; font-size: 12px; }
+
+/* ── [v1.0.25.4] 自动更新：设置-关于的更新按钮区 ──
+   交互（PRD）：手动「检查更新」+ 有新版下载完成时出现「重启安装更新」。
+   样式走既有令牌（var()），不写死色值；两钮并排用 flex 行。 */
+.set-update-row { display: flex; align-items: center; gap: var(--space-3); }
+.set-update-install { background: var(--accent, #4f7cff); color: #fff; }
+.set-update-install:hover { background: var(--accent-strong, #3d66e8); }
+.set-update-hint { font-size: 12px; color: var(--tx-weak, var(--ink-3)); margin-top: var(--space-2); }
+.set-update-hint.set-update-error { color: var(--danger); }
+/* [v1.0.26.2] 「当前已是最新版本」提示：绿色系，与 error 红色区分 */
+.set-update-hint.set-update-up-to-date { color: var(--success, #2e9e5b); }
