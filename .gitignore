@@ -50,3 +50,4 @@ Thumbs.db
 *.tar.gz
 *.7z
 build/
+assets/videos/compressed/
