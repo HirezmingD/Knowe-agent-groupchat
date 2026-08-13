@@ -33,6 +33,12 @@ from html.parser import HTMLParser
 from typing import Any, Iterable
 
 from .agent_runtime import ToolError
+from .network_policy import (
+    NetworkPolicyError,
+    PublicEgressProxy,
+    assert_public_http_url,
+    normalize_public_http_url,
+)
 
 log = logging.getLogger("knowe.web")
 
@@ -164,19 +170,13 @@ def normalize_urls(raw: Any) -> list[str]:
         if not isinstance(item, str) or not item.strip():
             continue
         url = item.strip()
-        parsed = urllib.parse.urlparse(url)
-        if not parsed.scheme:
-            url = "https://" + url                  # 模型经常直接给 example.com
-            parsed = urllib.parse.urlparse(url)
-        if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
-            # ★ 唯一的真安全边界：file:// 能绕开整个文件沙箱。
+        try:
+            out.append(normalize_public_http_url(url))
+        except NetworkPolicyError as exc:
             raise ToolError(
-                f"只支持 http/https：{item}。"
-                "本地文件请用 safe_read_file（项目内）或 read_external_file（项目外）。"
-            )
-        if not parsed.netloc:
-            raise ToolError(f"URL 不合法：{item}")
-        out.append(url)
+                f"URL 被安全策略拒绝（只支持 http/https 公网地址）：{exc}。"
+                "本地文件请用 safe_read_file；本机和局域网服务默认不向 Agent 开放。"
+            ) from None
     if not out:
         raise ToolError("一个有效的 URL 都没有")
     if len(out) > _MAX_URLS:
@@ -201,35 +201,71 @@ async def _fetch_one(url: str, timeout_s: float) -> Fetched:
     try:
         import httpx
     except ImportError:
-        return await asyncio.to_thread(_fetch_urllib, url, timeout_s)
+        return Fetched(url=url, ok=False, error="安全抓取需要 httpx 依赖")
 
     try:
-        async with httpx.AsyncClient(
-            timeout=timeout_s, follow_redirects=True,
-            headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
-        ) as cli:
-            async with cli.stream("GET", url) as resp:
-                ctype = resp.headers.get("content-type", "")
-                buf = bytearray()
-                transport_truncated = False
-                async for chunk in resp.aiter_bytes():
-                    remaining = _MAX_BYTES - len(buf)
-                    if remaining <= 0:
-                        transport_truncated = True
-                        break
-                    if len(chunk) > remaining:
-                        buf.extend(chunk[:remaining])
-                        transport_truncated = True
-                        break
-                    buf.extend(chunk)
-                if resp.status_code >= 400:
-                    return Fetched(url=url, ok=False, status=resp.status_code,
-                                   content_type=ctype,
-                                   error=f"HTTP {resp.status_code}")
-                return _decode(
-                    url, bytes(buf), ctype, resp.status_code,
-                    truncated=transport_truncated,
-                )
+        async with PublicEgressProxy(connect_timeout_s=timeout_s) as egress_proxy:
+            # Explicit proxy + trust_env=False prevents HTTP(S)_PROXY/NO_PROXY
+            # from creating an unreviewed alternate path.  For HTTPS, httpx does
+            # TLS over CONNECT using the original hostname and its normal CA
+            # verification; the local proxy never terminates TLS.
+            async with httpx.AsyncClient(
+                timeout=timeout_s,
+                follow_redirects=False,
+                proxy=egress_proxy.proxy_url,
+                trust_env=False,
+                headers={
+                    "User-Agent": _UA,
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                },
+            ) as cli:
+                current = url
+                for _redirect in range(6):
+                    # Validate every redirect hop.  The proxy repeats DNS policy
+                    # at connection time and pins the resulting numeric address,
+                    # so this friendly preflight is never treated as authority.
+                    current = await assert_public_http_url(current)
+                    async with cli.stream("GET", current) as resp:
+                        if resp.status_code in {301, 302, 303, 307, 308}:
+                            location = resp.headers.get("location", "").strip()
+                            if not location:
+                                return Fetched(
+                                    url=current, ok=False, status=resp.status_code,
+                                    error="重定向缺少 Location",
+                                )
+                            current = urllib.parse.urljoin(current, location)
+                            continue
+                        ctype = resp.headers.get("content-type", "")
+                        buf = bytearray()
+                        transport_truncated = False
+                        async for chunk in resp.aiter_bytes():
+                            remaining = _MAX_BYTES - len(buf)
+                            if remaining <= 0:
+                                transport_truncated = True
+                                break
+                            if len(chunk) > remaining:
+                                buf.extend(chunk[:remaining])
+                                transport_truncated = True
+                                break
+                            buf.extend(chunk)
+                        if resp.status_code >= 400:
+                            return Fetched(
+                                url=current,
+                                ok=False,
+                                status=resp.status_code,
+                                content_type=ctype,
+                                error=f"HTTP {resp.status_code}",
+                            )
+                        return _decode(
+                            current,
+                            bytes(buf),
+                            ctype,
+                            resp.status_code,
+                            truncated=transport_truncated,
+                        )
+                return Fetched(url=current, ok=False, error="重定向次数超过安全上限")
+    except NetworkPolicyError as exc:
+        return Fetched(url=url, ok=False, error=f"网络安全策略：{exc}")
     except Exception as exc:
         return Fetched(url=url, ok=False, error=f"{type(exc).__name__}: {exc}")
 

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import ConvList from '../components/ConvList';
@@ -23,9 +23,10 @@ import {
 import {
   registerMember, DEFAULT_AGENTS, DEFAULT_ROLE_TYPES, type Conv,
 } from '../store/state';
+import { installAutoLoadingImage } from '../test/image';
 
 function conv(): Conv {
-  return { projectId: 'p1', items: [], members: [], banner: null, draft: '' };
+  return { projectId: 'p1', items: [], members: [], banner: null, draft: '', unread: 0 };
 }
 
 /** 把 store 恢复到刚打开软件的样子 */
@@ -35,7 +36,10 @@ function resetStore(): void {
   } as never);
 }
 
-beforeEach(() => resetStore());
+beforeEach(() => {
+  resetStore();
+  installAutoLoadingImage();
+});
 
 // ═══════════════════════════════════════════════════════════════
 // 一、知知
@@ -44,14 +48,16 @@ beforeEach(() => resetStore());
 describe('知知 · 左栏固定入口', () => {
   it('★ 一个项目都没有时，左栏也有知知（不是一片空白）', () => {
     render(<ConvList />);
-    expect(screen.getByRole('button', { name: `项目 ${getZinniaDisplayName()}` })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `私聊 ${getZinniaDisplayName()}` })).toBeInTheDocument();
   });
 
-  it('知知用的是 zinnia.png，不是字形头像', () => {
+  it('知知预加载完成后用 zinnia.png，不是字形头像', async () => {
     render(<ConvList />);
-    const row = screen.getByRole('button', { name: `项目 ${getZinniaDisplayName()}` });
-    const img = within(row).getByRole('presentation', { hidden: true });
-    expect(img).toHaveAttribute('src', ZINNIA_AVATAR);
+    const row = screen.getByRole('button', { name: `私聊 ${getZinniaDisplayName()}` });
+    await waitFor(() => {
+      expect(within(row).getByRole('presentation', { hidden: true }))
+        .toHaveAttribute('src', ZINNIA_AVATAR);
+    });
   });
 
   it('★ 知知不是项目——不出现在项目列表里（否则会变成一个能归档的假项目）', () => {
@@ -62,19 +68,20 @@ describe('知知 · 左栏固定入口', () => {
     expect(list.map((p) => p.id)).toEqual(['p1']);
   });
 
-  it('搜索过滤不掉知知（她永远在最上面）', async () => {
+  it('全局搜索能找到知知，并暂时用结果列表替换会话列表', async () => {
     useKnoweStore.getState().ensureProject('p1', '官网改版');
     render(<ConvList />);
 
-    await userEvent.type(screen.getByLabelText('搜索项目'), 'zzzz');
+    await userEvent.type(screen.getByLabelText('全局搜索'), '知知');
 
-    expect(screen.getByRole('button', { name: `项目 ${getZinniaDisplayName()}` })).toBeInTheDocument();
+    const results = await screen.findAllByRole('option');
+    expect(results.some((row) => row.textContent?.includes(getZinniaDisplayName()))).toBe(true);
     expect(screen.queryByRole('button', { name: '项目 官网改版' })).not.toBeInTheDocument();
   });
 
   it('点知知 → 切到平台会话', async () => {
     render(<ConvList />);
-    await userEvent.click(screen.getByRole('button', { name: `项目 ${getZinniaDisplayName()}` }));
+    await userEvent.click(screen.getByRole('button', { name: `私聊 ${getZinniaDisplayName()}` }));
 
     expect(useKnoweStore.getState().activeProjectId).toBe(PLATFORM_PROJECT_ID);
     expect(selectIsPlatform(useKnoweStore.getState())).toBe(true);
@@ -163,10 +170,11 @@ describe('头像 · 确定性派生', () => {
 });
 
 describe('头像 · Avatar 组件', () => {
-  it('给了 src → 渲染 <img>', () => {
+  it('给了 src → 预加载完成后渲染 <img>', async () => {
     const { container } = render(<Avatar glyph="前" src="./avatars/agent/avatar_0001.png" />);
-    const img = container.querySelector('img');
-    expect(img).toHaveAttribute('src', './avatars/agent/avatar_0001.png');
+    await waitFor(() => {
+      expect(container.querySelector('img')).toHaveAttribute('src', './avatars/agent/avatar_0001.png');
+    });
   });
 
   it('没给 src → 还是字形（老行为不变）', () => {
@@ -175,9 +183,13 @@ describe('头像 · Avatar 组件', () => {
     expect(container.textContent).toBe('前');
   });
 
-  it('★ 图片加载失败 → 退回字形，绝不留一个空白圆圈', () => {
+  it('★ 已显示的图片加载失败 → 退回字形，绝不留一个空白圆圈', async () => {
     const { container } = render(<Avatar glyph="前" src="./avatars/agent/不存在.png" />);
-    const img = container.querySelector('img')!;
+    const img = await waitFor(() => {
+      const loaded = container.querySelector('img');
+      expect(loaded).not.toBeNull();
+      return loaded as HTMLImageElement;
+    });
 
     fireEvent.error(img);   // 走 React 合成事件，原生 dispatchEvent 到不了 onError
 
@@ -190,7 +202,7 @@ describe('头像 · 成员注册时带上头像', () => {
   it('registerMember 给每个成员一张脸', () => {
     const c = conv();
     registerMember(c, 'fe_1', DEFAULT_AGENTS, DEFAULT_ROLE_TYPES);
-    expect(c.members[0]!.display.avatarUrl).toBe(pickAvatar('fe_1'));
+    expect(c.members[0]!.display.avatarUrl).toBe(pickAvatar('fe_1', c.projectId));
   });
 
   it('知知用 zinnia.png', () => {
@@ -204,17 +216,15 @@ describe('头像 · 成员注册时带上头像', () => {
 // 三、姓名中英各半
 // ═══════════════════════════════════════════════════════════════
 
-describe('成员姓名 · 中英各半', () => {
-  it('★ 连续注册 100 个成员，中英文占比都在 30%~70% 之间', () => {
-    let english = 0;
-    for (let i = 0; i < 100; i++) {
+describe('成员姓名 · 后端权威且确定', () => {
+  it('★ 连续注册 100 个成员，重建花名册后名字仍完全一致', () => {
+    const names = (): string[] => Array.from({ length: 100 }, (_, i) => {
       const c = conv();
       registerMember(c, `fe_${i}`, DEFAULT_AGENTS, DEFAULT_ROLE_TYPES);
-      // 英文名判据：首字符是 ASCII 字母
-      if (/^[A-Za-z]/.test(c.members[0]!.display.name)) english += 1;
-    }
-    expect(english).toBeGreaterThanOrEqual(30);
-    expect(english).toBeLessThanOrEqual(70);
+      return c.members[0]!.display.name;
+    });
+
+    expect(names()).toEqual(names());
   });
 
   it('字形永远跟着显示名走', () => {

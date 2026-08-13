@@ -22,7 +22,7 @@ def test_project_memory_generated_without_llm():
             ws, {"final_response": "完成了登录页 UI，交了 report。"},
             turn_count=1, members=2)
     asyncio.run(run())
-    txt = m.project_context_path(ws).read_text()
+    txt = m.project_context_path(ws).read_text(encoding="utf-8")
     assert "登录页" in txt, "无 LLM 时应把原文摘录写进最近活动（6c）"
     shutil.rmtree(d)
 
@@ -67,12 +67,12 @@ def test_platform_manifest_lifecycle():
     pm = PlatformManifest(data, install, "0.12")
     pm.refresh()
     assert pm.manifest_path.is_file() and pm.changelog_path.is_file()
-    assert "首次安装" in pm.changelog_path.read_text()
+    assert "首次安装" in pm.changelog_path.read_text(encoding="utf-8")
 
     time.sleep(0.01)
     open(os.path.join(install, "b.py"), "w").write("y=2\n")   # 新增
     pm.refresh()
-    assert "新增" in pm.changelog_path.read_text()
+    assert "新增" in pm.changelog_path.read_text(encoding="utf-8")
 
     snap = pm._load_snapshot()
     assert not any("node_modules" in k for k in snap), "node_modules 应被跳过"
@@ -80,7 +80,7 @@ def test_platform_manifest_lifecycle():
     # 版本升级入日志
     pm2 = PlatformManifest(data, install, "0.13")
     pm2.refresh()
-    assert "0.12 → 0.13" in pm2.changelog_path.read_text()
+    assert "0.12 → 0.13" in pm2.changelog_path.read_text(encoding="utf-8")
 
     # brief 里有真实关键路径（回答「公告栏存哪」）
     brief = pm2.read_brief()

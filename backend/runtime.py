@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequen
 from knowe_provenance import current_provenance_dict, normalize_provenance, unknown_legacy_provenance
 
 from knowe_core.errors import ProviderError
+from knowe_core.redaction import redact_sensitive_text
 
 
 WORKER_TOOL_NAMES: tuple[str, ...] = (
@@ -1199,13 +1200,13 @@ class WorkerRuntime:
         except Exception as exc:
             # v1.0.19.5: 不再把异常吞成裸类名——ProviderError 自带结构化诊断
             # （message / HTTP 状态码 / 服务商响应体），必须透传给项目经理与交接文档。
-            detail = str(exc).strip() or type(exc).__name__
+            detail = redact_sensitive_text(exc).strip() or type(exc).__name__
             if isinstance(exc, ProviderError):
                 detail = exc.message
                 if exc.status_code:
                     detail = f"{detail} [HTTP {exc.status_code}]"
                 if exc.response_body:
-                    detail = f"{detail} :: {str(exc.response_body)[:300]}"
+                    detail = f"{detail} :: {redact_sensitive_text(exc.response_body, limit=300)}"
             result = self._finish_result(
                 RuntimeStatus.SYSTEM_ERROR,
                 run,

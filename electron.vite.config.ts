@@ -6,22 +6,20 @@
  *   · preload  → out/preload/index.js   （桥的渲染侧，特殊的沙箱前环境）
  *   · renderer → out/renderer/          （React 页面，浏览器环境）
  *
- * main 和 preload 都用 externalizeDepsPlugin()：把 electron 及 node_modules 里的依赖
- *   留成 require 外链，不打进 bundle——主进程/preload 跑在 Node 里，本来就能 require，
- *   打进去只会变大变慢、还可能把原生模块打坏。
+ * electron-vite 5 默认把 main/preload 的 Electron、Node 内建模块及生产依赖外置，
+ *   无需已弃用的 externalizeDepsPlugin()。外置依赖由 electron-builder 随包收集。
  * renderer 用 @vitejs/plugin-react：和纯前端那套一致（JSX / Fast Refresh）。
  *
  * 三个入口路径都和 package.json 的 "main": "out/main/index.js" 对齐。
  */
 
 import { resolve } from 'node:path';
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   // ── 主进程 ──
   main: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'electron/main.ts') },
@@ -34,12 +32,23 @@ export default defineConfig({
   //   trayCard.* 是托盘卡片窗口的桥（只有一个 clickProject，见 trayCardPreload.ts）。
   //   互不相干——卡片窗口没有理由拿到主窗口那一整套桥方法。
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
+      // Each sandboxed preload must be a self-contained file. Electron's
+      // restricted preload require cannot load Rollup's relative shared chunks.
+      isolatedEntries: true,
+      externalizeDeps: false,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'electron/preload.ts'),
           trayCard: resolve(__dirname, 'electron/trayCardPreload.ts'),
+        },
+        // Electron's sandboxed preload environment only supports its restricted
+        // CommonJS loader.  package.json uses `type: module`, so electron-vite
+        // would otherwise emit .mjs files that fail before contextBridge runs.
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs',
+          chunkFileNames: '[name]-[hash].cjs',
         },
       },
     },

@@ -38,7 +38,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.engine as E                                          # noqa: E402
-from backend.engine import ACTION_CONTRACT, REPORT_NOTICE, ProjectEngine   # noqa: E402
+from backend.engine import REPORT_NOTICE, ProjectEngine, _engine_block   # noqa: E402
+
+ACTION_CONTRACT = _engine_block("ACTION_CONTRACT", lang="zh")
 
 SOUL = Path(E.__file__).parent / "souls" / "coordinator.txt"
 
@@ -125,7 +127,7 @@ def test_propose_next_has_a_note_param() -> None:
       现在只剩一条：**要说，就得穿过这个工具调用。**
     """
     from backend import tools_knowe
-    params = tools_knowe.PROPOSE_NEXT_PARAMS["properties"]
+    params = tools_knowe._coordinator_schemas()["propose_next"]["properties"]
     assert "note" in params
     d = params["note"]["description"]
     assert "显示在审批卡上" in d

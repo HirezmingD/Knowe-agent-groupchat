@@ -56,6 +56,7 @@ async function probeMonth(
   const worker = async (): Promise<void> => {
     while (idx < dates.length) {
       const my = dates[idx++];
+      if (!my) return;
       try {
         const q = new URLSearchParams({
           project_id: projectId, date: my, page: '1', page_size: '1',

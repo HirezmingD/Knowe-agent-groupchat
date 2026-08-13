@@ -74,7 +74,7 @@ Masking handles **internal identifiers** — what you see is readable informatio
 
 - **Member internal ids** — always masked in the interface's natural language: you see the member's name, not the internal identifier;
 - **Internal paths** — the same rule: the interface shows readable paths, internal paths are not directly exposed;
-- **API Keys** — kept on this machine only, never written to browser storage (see [30 Configuration · Models and Providers · API Key security: not written to disk](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)); screens involving Keys follow the mask / leave-blank convention.
+- **API Keys** — encrypted locally with Windows DPAPI and never written to browser storage (see [30 Configuration · Models and Providers · API Key security: encrypted local storage](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)); screens involving Keys follow the mask / leave-blank convention.
 
 On the engineering side too, the renderer process doesn't directly hold Node capabilities (contextIsolation) — the UI layer can't bypass the app's boundaries to operate directly on local resources. That's another boundary of Knowe's privacy design.
 

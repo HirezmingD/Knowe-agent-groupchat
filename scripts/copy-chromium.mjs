@@ -13,7 +13,7 @@
  *   node_modules 的 playwright-core（两者可能不同版本！实测前端 1.62.0→rev1234，
  *   后端 1.61.0→rev1228，用错会导致 playwright 拒绝启动）。
  *
- * Python 探测：KNOWE_DEV_PYTHON → python → python3（与 preflight.mjs 同模式）。
+ * Python 探测：KNOWE_DEV_PYTHON → 仓库 .venv → python → python3。
  *
  * 幂等：目标已存在且完整时跳过。
  */
@@ -32,7 +32,10 @@ const MS_PLAYWRIGHT_ROOT = join(homedir(), 'AppData', 'Local', 'ms-playwright');
 
 function backendExpectedRevision() {
   // 用后端 Python 读 playwright 的期望浏览器 revision（单一事实源）。
-  const candidates = [process.env.KNOWE_DEV_PYTHON, 'python', 'python3'].filter(Boolean);
+  const repositoryPython = process.platform === 'win32'
+    ? join(ROOT, '.venv', 'Scripts', 'python.exe')
+    : join(ROOT, '.venv', 'bin', 'python');
+  const candidates = [process.env.KNOWE_DEV_PYTHON, repositoryPython, 'python', 'python3'].filter(Boolean);
   const probe = `
 import json, pathlib
 try:

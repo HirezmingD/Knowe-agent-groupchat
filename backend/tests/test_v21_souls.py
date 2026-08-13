@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-SOULS = Path(__file__).resolve().parents[1] / "backend" / "souls"
+SOULS = Path(__file__).resolve().parents[1] / "souls"
 
 
 def coordinator_soul() -> str:

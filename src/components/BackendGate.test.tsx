@@ -56,6 +56,10 @@ class FakeBridge implements KnoweBridge {
 
   selectDirectory = (): Promise<string | null> => Promise.resolve(null);   // [v0.7 A0]
   openPath = (_dir: string): Promise<void> => Promise.resolve();            // [v0.39.3]
+  getRuntimeToken = (): Promise<string> => Promise.resolve('test-token');
+  openPreview = (): Promise<void> => Promise.resolve();
+  onPreviewOpen = (): (() => void) => () => {};
+  previewReady = (): void => {};
 
   get listenerCount(): number {
     return this.listeners.size;

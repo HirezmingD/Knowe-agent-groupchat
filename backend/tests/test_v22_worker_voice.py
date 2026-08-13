@@ -6,10 +6,18 @@ from pathlib import Path
 import pytest
 
 from backend import tools_knowe
+from backend.prompt_resolver import resolve_prompt_path
 from backend.runtime import WORKER_TOOL_NAMES
 
 PROMPT = Path(tools_knowe.__file__).with_name("worker_prompt.md")
 SOUL = Path(tools_knowe.__file__).parent / "souls" / "worker.txt"
+SPEC = Path(tools_knowe.__file__).with_name("KnoweBackend.spec")
+
+
+def localized_prompt(lang: str) -> tuple[Path, str]:
+    path = resolve_prompt_path("worker_prompt.md", lang=lang)
+    assert path is not None and path.is_file()
+    return path, path.read_text("utf-8")
 
 
 class FakeEngine:
@@ -31,11 +39,16 @@ def test_registry_is_the_exact_fixed_19_without_completion_pseudotools() -> None
     assert "read_result_ref" not in names
 
 
-def test_only_one_canonical_worker_prompt_path_exists() -> None:
+def test_language_resolved_worker_prompt_family_is_packaged() -> None:
     assert PROMPT.is_file()
     backend_root = Path(tools_knowe.__file__).resolve().parents[1]
     assert not (backend_root / "knowe_prompts").exists()
     assert not (Path(tools_knowe.__file__).parent / "knowe_prompts").exists()
+    for lang in ("zh", "en"):
+        path, _ = localized_prompt(lang)
+        assert path == Path(tools_knowe.__file__).parent / "prompts" / lang / "worker_prompt.md"
+    # PyInstaller recursively ships the directory selected by prompt_resolver.
+    assert '("prompts", "backend/prompts")' in SPEC.read_text("utf-8")
 
 
 def test_prompt_requires_native_provider_tool_calls() -> None:
@@ -97,26 +110,32 @@ def test_retained_soul_points_to_canonical_prompt_and_does_not_define_another_pr
 
 
 @pytest.mark.parametrize(
-    ("task_context", "expected_rule"),
+    ("lang", "language_rule", "explicit_rule", "preserve_rule"),
     [
-        ("请用中文完成分析", "explicit output-language requirement"),
-        ("Please answer in English", "explicit output-language requirement"),
-        ("中英混合 task without an explicit override", "primary natural language"),
+        ("zh", "否则使用简体中文", "明确指定的输出语言", "保留项目路径、代码、命令"),
+        ("en", "Otherwise, reply in English", "explicit output-language requirement", "Preserve project paths, code, commands"),
     ],
 )
-def test_prompt_defines_language_following_without_runtime_translation(
-    task_context: str, expected_rule: str,
+def test_prompt_follows_the_resolved_active_language_without_runtime_translation(
+    lang: str,
+    language_rule: str,
+    explicit_rule: str,
+    preserve_rule: str,
 ) -> None:
-    # The matrix protects one prompt/context property; Runtime must not inspect these strings.
-    prompt = PROMPT.read_text("utf-8")
-    assert task_context
-    assert expected_rule in prompt
-    assert "Preserve project paths, code, commands" in prompt
+    _, prompt = localized_prompt(lang)
+    assert language_rule in prompt
+    assert explicit_rule in prompt
+    assert preserve_rule in prompt
 
 
-def test_language_rule_exists_only_in_canonical_prompt_not_runtime() -> None:
-    prompt = PROMPT.read_text("utf-8")
+def test_language_rules_and_security_contract_exist_in_both_resolved_prompts_not_runtime() -> None:
+    _, zh = localized_prompt("zh")
+    _, en = localized_prompt("en")
     runtime = (Path(tools_knowe.__file__).parent / "runtime.py").read_text("utf-8")
-    assert "## Response language" in prompt and "primary natural language" in prompt
+    assert "## 回复语言" in zh and "系统当前启用的语言" in zh
+    assert "## Response language" in en and "active system language" in en
+    for prompt in (zh, en):
+        for invariant in ("<tool_call>", "19", "offset", "limit", "safe_bash", "SHA-256"):
+            assert invariant in prompt
     for detector in ("detect_language", "language_regex", "translate_final"):
         assert detector not in runtime

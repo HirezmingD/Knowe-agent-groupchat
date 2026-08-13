@@ -36,6 +36,10 @@ def _clean_config_baseline() -> dict[str, object]:
         "fake_delta_delay_s": 0.0,
         "fake_think_delay_s": 0.0,
         "fake_work_delay_s": 0.0,
+        # Keep the protected install root exact.  An old config fallback pointed at
+        # the parent of the checkout, causing every pytest tmp workspace created
+        # inside the checkout to be (correctly) rejected as an overlap.
+        "install_root": str(ROOT.parent.resolve()),
     })
     return baseline
 
@@ -53,6 +57,8 @@ def _reset_runtime_settings() -> None:
     runtime_settings._state.clear()  # noqa: SLF001
     runtime_settings._state.update(runtime_settings._default_state())  # noqa: SLF001
     runtime_settings._loaded = True  # noqa: SLF001
+    runtime_settings._load_error = None  # noqa: SLF001
+    runtime_settings._secret_protector_override = None  # noqa: SLF001
 
 
 @pytest.fixture(autouse=True)

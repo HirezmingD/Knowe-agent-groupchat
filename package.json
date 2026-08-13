@@ -1,12 +1,15 @@
 {
   "x-knowe-implementation": "[v1.0.13][R5]",
   "name": "knowe",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "private": true,
   "license": "MIT",
   "description": "Command your Agent team through group chat",
   "main": "out/main/index.js",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "verify": "npm run typecheck && npm run lint && npm run test",
     "typecheck": "tsc --noEmit && tsc --noEmit -p electron/tsconfig.json",
@@ -17,16 +20,19 @@
     "electron:dev": "electron-vite dev",
     "electron:start": "electron .",
     "preflight": "node scripts/preflight.mjs",
-    "electron:build": "electron-vite build && node scripts/test-built-main.mjs && node scripts/write-build-manifest.mjs",
+    "electron:build": "node scripts/run-electron-vite-build.mjs && node scripts/test-built-main.mjs && node scripts/write-build-manifest.mjs",
     "electron:preview": "electron-vite preview",
     "test:built-main": "node scripts/test-built-main.mjs",
     "build:manifest": "node scripts/write-build-manifest.mjs",
     "electron:build:clean": "node scripts/clean-electron-build.mjs && npm run electron:build",
     "icon:ico": "node scripts/make-icon-ico.mjs",
     "copy:chromium": "node scripts/copy-chromium.mjs",
-    "dist:win": "node scripts/clean-electron-build.mjs && npm run icon:ico && npm run electron:build && npm run copy:chromium && electron-builder --win nsis"
+    "sandbox:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-sandbox-launcher.ps1",
+    "verify:packaged-security": "node scripts/verify-packaged-security.mjs release/win-unpacked/Knowe.exe",
+    "dist:win": "npm run sandbox:build && npm run preflight && node scripts/clean-electron-build.mjs && npm run icon:ico && npm run electron:build && npm run copy:chromium && electron-builder --win nsis && npm run verify:packaged-security"
   },
   "dependencies": {
+    "electron-updater": "6.8.9",
     "i18next": "^26.3.6",
     "immer": "^10.1.1",
     "jszip": "^3.10.1",
@@ -37,18 +43,19 @@
     "react-dom": "^18.3.1",
     "react-i18next": "^17.0.11",
     "react-markdown": "^10.1.0",
+    "read-excel-file": "9.3.10",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-stringify": "^10.0.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "xlsx": "^0.18.5",
     "zod": "^3.23.8",
-    "zustand": "^4.5.4",
-    "electron-updater": "^6.8.9"
+    "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "@electron/fuses": "2.1.3",
+    "@microsoft/mxc-sdk": "0.7.0",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.4.6",
     "@testing-library/react": "^16.0.0",
@@ -60,16 +67,16 @@
     "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "electron": "^31.2.0",
+    "electron": "43.4.0",
     "electron-builder": "^26.15.3",
-    "electron-vite": "^2.3.0",
+    "electron-vite": "5.0.0",
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "jsdom": "^24.1.0",
     "sharp": "^0.35.3",
     "typescript": "^5.5.3",
-    "vite": "^5.3.4",
-    "vitest": "^1.6.0",
+    "vite": "7.3.6",
+    "vitest": "4.1.10",
     "ws": "^8.18.0"
   },
   "repository": {

@@ -135,7 +135,7 @@
 | 主模型 | **Primary model** | 全团队默认、首启强制绑定 |
 | 辅助模型 | **Fallback model** | 配置后主模型不可用时自动降级（automatic fallback）；字面直译 auxiliary model，推荐 fallback model |
 | 按成员绑定模型 | **Per-member model binding** | 个别成员单独指定模型 |
-| API Key | **API Key** | 大写；「不落盘」= never stored in browser storage / kept on this machine only |
+| API Key | **API Key** | 大写；「系统加密落盘」= encrypted at rest with Windows DPAPI；「不写入浏览器存储」= never stored in browser storage |
 | 连接测试 | **Connection test** | 首启引导 = first-run setup / first-run model gate |
 | Token 用量 | **Token usage** | 用量面板 = usage dashboard；统计卡 = stat cards；趋势图 = trend chart；明细表 = breakdown table（按模型 / 按成员 = by model / by member 双 Tab） |
 | 费用（¥） | **Cost (¥)** | 保留 ¥ 符号；首现可注 RMB (¥) |

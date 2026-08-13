@@ -8,9 +8,8 @@
  * bound). Preview/reveal side effects are mocked — this test is about the fold contract.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, cleanup } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 vi.mock('../store/filePreview', () => ({
   openPreviewWindow: vi.fn(() => Promise.resolve()),
@@ -35,7 +34,7 @@ function cardCount(): number {
 }
 
 function toggle(): HTMLElement | null {
-  return document.querySelector('.fc-fold-toggle');
+  return document.querySelector('.file-card-fold-toggle');
 }
 
 describe('FileCardList bounded folding (AC-FC-1)', () => {
@@ -110,7 +109,7 @@ describe('FileCardList accessibility & isolation (AC-FC-2)', () => {
     const m1 = screen.getByTestId('m1');
     const m2 = screen.getByTestId('m2');
     // Expand only the first message.
-    fireEvent.click(m1.querySelector('.fc-fold-toggle')!);
+    fireEvent.click(m1.querySelector('.file-card-fold-toggle')!);
     expect(m1.querySelectorAll('.file-card').length).toBe(10);
     // The second message stays collapsed.
     expect(m2.querySelectorAll('.file-card').length).toBe(6);

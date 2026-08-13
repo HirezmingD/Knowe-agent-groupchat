@@ -67,10 +67,12 @@ In one sentence: **every reply carries the current context of "recent activity +
 
 ## Key and credential security: on this machine only
 
-(Definitions in [30 Configuration · Models and Providers · API Key security: not written to disk](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk))
+(Definitions in [30 Configuration · Models and Providers · API Key security: encrypted local storage](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk))
 
 - **Kept on this machine only** — the interface says "used to call the selected model, kept on this machine only"; Knowe only exchanges requests with the provider of the selected model, **depending on no extra account or cloud service** (see [02 Installation and System Requirements · System requirements](02-Installation-and-System-Requirements.md#system-requirements));
+- **Windows DPAPI encryption** — keys are written as current-user DPAPI ciphertext, with a protected digest authenticating the provider, model, endpoint, and encrypted fields together. If both the primary and encrypted backup fail validation, settings fail closed;
 - **Never written to browser storage** — the API Key isn't stored in localStorage; there's no key copy in the browser storage;
+- **Never passed to agent processes** — model-authored terminal processes do not inherit provider keys or other host tokens;
 - **Clearable and re-fillable anytime** — in "Settings → Models and Providers" you can clear the saved Key and re-enter it;
 - **UI process isolation** — Knowe's UI process enables contextIsolation, the renderer process has no Node capability, and the UI layer can't directly access system resources.
 
@@ -82,7 +84,7 @@ Masking handles **internal identifiers**, so what you see is readable informatio
 
 - **Member internal ids** — always masked in the interface's natural language; you see member names, not internal identifiers;
 - **Internal paths** — the same rule: the interface shows readable paths; internal paths aren't exposed directly;
-- **Key screens in the UI** — screens that involve Keys follow the mask / leave-empty guideline (see [Models and Providers · API Key security: not written to disk](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk) and [30 Configuration · Account and Identity · About: version and build info](30-04-Account-and-Identity.md#about-version-and-build-info));
+- **Key screens in the UI** — screens that involve Keys follow the mask / leave-empty guideline (see [Models and Providers · API Key security: encrypted local storage](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk) and [30 Configuration · Account and Identity · About: version and build info](30-04-Account-and-Identity.md#about-version-and-build-info));
 - **contextIsolation at the engineering layer** — the renderer process doesn't directly hold Node capability, so the UI layer can't bypass the app boundary and operate on machine resources directly — another boundary in Knowe's privacy design.
 
 Note: masking targets **internal identifiers**, not your chat content — chat content is stored and used according to the project memory rules (see [10 Core Concepts · Memory and Context](10-05-Memory-and-Context.md)).
@@ -92,6 +94,8 @@ Note: masking targets **internal identifiers**, not your chat content — chat c
 (Definitions in [10 Core Concepts · Projects and Workspaces · The workspace directory: the AI's sandbox](10-03-Projects-and-Workspaces.md#the-workspace-directory-the-ais-sandbox) and [20 Guides · Files and Attachments · The safety guard: only files you picked yourself are read](20-05-Files-and-Attachments.md#the-safety-guard-only-files-you-picked-yourself-are-read))
 
 - The team (the Coordinator verifying, the Workers executing) reads and writes files **only within the workspace directory**; any file outside the directory is, by default, unreadable and unwritable for the AI;
+- Model-authored shell and Python processes run through a Windows native execution container: the workspace is their only writable root and network is denied. If the OS, filesystem, or native probe cannot establish that boundary, terminal execution is unavailable rather than falling back to the host shell;
+- The pinned MXC 0.7 runtime is an early Microsoft preview. Its AppContainer/Job primitives are real OS enforcement and Knowe adds path, link, resource, and escape regression gates, but this is not VM-grade isolation; genuinely hostile unknown code should still run on a disposable virtual machine;
 - **The attachments you drag into the composer yourself are the exception entrance** — and only paths the app has "seen and signed" with its own eyes are read, so it can't be tricked into reading arbitrary files;
 - In one sentence: **whatever land you fence in, the team works within that land.** Want to show the team an extra file — drag it in yourself.
 
@@ -107,7 +111,7 @@ Only to the models configured in "Settings → Models and Providers" — the pri
 
 **Q: What if an API Key leaks?**
 
-First revoke or rotate the key in the **model provider's console** so the old Key is invalidated; then go back to "Settings → Models and Providers" to clear it and re-enter the new Key. Because the Key isn't stored in localStorage and lives on this machine only, there's no residual key copy on the UI side to be read (see [API Key security: not written to disk](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)).
+First revoke or rotate the key in the **model provider's console** so the old Key is invalidated; then go back to "Settings → Models and Providers" to clear it and re-enter the new Key. The settings file uses Windows DPAPI protection and the Key is not stored in localStorage. After upgrading from an older plaintext-storage release, rotate the Key once the migration succeeds (see [API Key security: encrypted local storage](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)).
 
 **Q: Which files on my machine can members touch?**
 

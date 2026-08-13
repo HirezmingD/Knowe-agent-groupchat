@@ -9,7 +9,7 @@
 
 | 谁 | 能调 |
 |:--|:--|
-| 项目经理 coordinator | propose_agents* · propose_next* · propose_remove_agent* · read_report · list_handoff_dir · search/read_project_memory · search/read_project_knowledge · read_external_file · list_external_dir |
+| 项目经理 coordinator | propose_agents* · propose_next* · propose_remove_agent* · read_report · list_handoff_dir · 项目内只读 · search/read_project_memory · search/read_project_knowledge |
 | Worker（V2） | 项目文件 6 · 条件式外部只读/复制 3 · **safe_bash ×1** · web ×2 · **browser ×7**；精确清单由 `WorkerToolSurfaceV2` 生成 |
 
 [v0.20 Batch 4] 加粗的那些是这一批新加的。**一个都没给项目经理**，这是有意的：
@@ -46,6 +46,7 @@ import json
 import logging
 import mimetypes
 import os
+import stat
 import tempfile
 import re
 import shutil
@@ -304,6 +305,35 @@ _EXTERNAL_READ_FORBIDDEN = ("/proc", "/sys", "/dev", "C:\\Windows\\System32")
 _EXTERNAL_LIST_LIMIT = 500
 
 
+def _filesystem_alias_kind(path: Path) -> str | None:
+    """Return the unsafe filesystem alias type for one existing path.
+
+    A lexical containment check cannot prove containment for reparse points, and
+    an ordinary-looking hard link can expose the same file record through a path
+    outside the workspace.  Both must be refused by the host file broker.
+    """
+
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError(f"cannot inspect filesystem path {path}: {exc}") from None
+    attributes = int(getattr(info, "st_file_attributes", 0) or 0)
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    if stat.S_ISLNK(info.st_mode) or attributes & reparse_flag:
+        return "reparse point"
+    if stat.S_ISREG(info.st_mode) and int(getattr(info, "st_nlink", 1)) > 1:
+        return "hard link"
+    return None
+
+
+def _reject_filesystem_alias(path: Path, *, label: str) -> None:
+    kind = _filesystem_alias_kind(path)
+    if kind is not None:
+        raise ValueError(f"{kind} is not allowed in {label}: {path}")
+
+
 def resolve_in_sandbox(root: Path, rel: str, role: str = "worker",
                        operation: str = "read") -> Path:
     """Resolve a user-business path and reject traversal or legacy internal folders.
@@ -323,6 +353,15 @@ def resolve_in_sandbox(root: Path, rel: str, role: str = "worker",
             raise ValueError(msg("tools_knowe.py.039", raw=raw))
 
     root = root.resolve()
+    _reject_filesystem_alias(root, label="project paths")
+    lexical = root
+    for component in Path(raw).parts:
+        if component in {"", "."}:
+            continue
+        if component == "..":
+            raise ValueError(msg("tools_knowe.py.040", raw=raw))
+        lexical = lexical / component
+        _reject_filesystem_alias(lexical, label="project paths")
     target = (root / raw).resolve()
     if root != target and root not in target.parents:
         raise ValueError(msg("tools_knowe.py.040", raw=raw))
@@ -373,6 +412,10 @@ def _resolve_external_read(raw: Any) -> Path:
     path = Path(raw.strip()).expanduser()
     if not path.is_absolute():
         raise ValueError(msg("tools_knowe.py.169"))
+    lexical = Path(path.anchor)
+    for component in path.parts[1:]:
+        lexical = lexical / component
+        _reject_filesystem_alias(lexical, label="external paths")
     try:
         resolved = path.resolve(strict=True)
     except (OSError, RuntimeError):
@@ -383,176 +426,6 @@ def _resolve_external_read(raw: Any) -> Path:
            for bad in _EXTERNAL_READ_FORBIDDEN):
         raise ValueError(msg("tools_knowe.py.322", raw=raw))
     return resolved
-
-
-def _register_external_readonly(
-    reg: ToolRegistry, engine: "ProjectEngine", role: str,
-) -> None:
-    """项目目录外只允许读取/列目录；所有工具都不修改源路径。"""
-
-    def outside_project(path: Path) -> str | None:
-        try:
-            root = engine.workspace_root.resolve()
-        except Exception as exc:
-            return msg("tools_knowe.py.042", exc=exc)
-        if _is_internal_storage_path(engine, path):
-            return msg("tools_knowe.py.043")
-        if _under(path, root):
-            if role == "worker":
-                return msg("tools_knowe.py.044")
-            return (msg("tools_knowe.py.045") +
-                    msg("tools_knowe.py.046"))
-        return None
-
-    def page_number(args: Mapping[str, Any], key: str, default: int, *, minimum: int,
-                    maximum: int | None = None) -> int:
-        raw = args.get(key)
-        try:
-            value = int(raw) if raw not in (None, "") else default
-        except (TypeError, ValueError):
-            value = default
-        value = max(minimum, value)
-        return min(maximum, value) if maximum is not None else value
-
-    async def handle_read_external(args: dict[str, Any], **kw: Any) -> str:
-        del kw
-        try:
-            path = _resolve_external_read(args.get("path"))
-        except ValueError as exc:
-            return _err(str(exc))
-        denied = outside_project(path)
-        if denied:
-            return _err(denied)
-        if not path.is_file():
-            return _err(msg("tools_knowe.py.047", path=path))
-
-        offset = page_number(args, "offset", 0, minimum=0)
-        limit = page_number(args, "limit", 200, minimum=1, maximum=500)
-
-        def read_page() -> tuple[list[str], bool]:
-            rows: list[str] = []
-            with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-                for index, line in enumerate(handle):
-                    if index < offset:
-                        continue
-                    if len(rows) >= limit:
-                        return rows, True
-                    rows.append(line.rstrip("\r\n"))
-            return rows, False
-
-        try:
-            rows, truncated = await asyncio.to_thread(read_page)
-            size = path.stat().st_size
-        except OSError as exc:
-            return _err(msg("tools_knowe.py.048", exc=exc))
-        next_offset = offset + len(rows)
-        payload: dict[str, Any] = {
-            "path": str(path),
-            "content": "\n".join(rows),
-            "offset": offset,
-            "limit": limit,
-            "offset_unit": "lines",
-            "returned_lines": len(rows),
-            "byte_size": size,
-            "truncated": truncated,
-            "source_ref": f"external://{path}#lines={offset + 1}-{next_offset}",
-        }
-        if truncated:
-            payload["next_offset"] = next_offset
-            payload["continuation"] = _continuation(
-                "read_external_file", path=str(path), offset=next_offset, limit=limit,
-            )
-        return _ok(**payload)
-
-    _register(
-        reg,
-        name="read_external_file",
-        description=(
-            msg("tools_knowe.py.049") +
-            msg("tools_knowe.py.050") +
-            msg("tools_knowe.py.051")
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": msg("tools_knowe.py.052")},
-                "offset": {"type": "integer", "minimum": 0, "description": msg("tools_knowe.py.053")},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-            },
-            "required": ["path"],
-        },
-        handler=handle_read_external,
-    )
-
-    async def handle_list_external(args: dict[str, Any], **kw: Any) -> str:
-        del kw
-        try:
-            path = _resolve_external_read(args.get("path"))
-        except ValueError as exc:
-            return _err(str(exc))
-        denied = outside_project(path)
-        if denied:
-            return _err(denied)
-        if not path.is_dir():
-            return _err(msg("tools_knowe.py.054", path=path))
-        offset = page_number(args, "offset", 0, minimum=0)
-        limit = page_number(args, "limit", 100, minimum=1, maximum=_EXTERNAL_LIST_LIMIT)
-        try:
-            children = sorted(path.iterdir(), key=lambda item: item.name.casefold())
-        except OSError as exc:
-            return _err(msg("tools_knowe.py.055", exc=exc))
-
-        rows: list[dict[str, Any]] = []
-        for child in children:
-            try:
-                resolved_child = child.resolve()
-            except (OSError, RuntimeError):
-                resolved_child = child
-            if _is_internal_storage_path(engine, resolved_child):
-                continue
-            try:
-                kind = "dir" if child.is_dir() else "file" if child.is_file() else "other"
-                size = child.stat().st_size if kind == "file" else None
-            except OSError:
-                kind, size = "unreadable", None
-            row: dict[str, Any] = {"name": child.name, "type": kind, "path": str(child)}
-            if isinstance(size, int):
-                row["size"] = size
-            rows.append(row)
-
-        page = rows[offset: offset + limit]
-        next_offset = offset + len(page)
-        truncated = next_offset < len(rows)
-        payload: dict[str, Any] = {
-            "path": str(path), "entries": page, "count": len(page),
-            "total_entries": len(rows), "offset": offset, "limit": limit,
-            "truncated": truncated,
-            "source_ref": f"external://{path}#entries={offset}-{max(offset, next_offset - 1)}",
-        }
-        if truncated:
-            payload["next_offset"] = next_offset
-            payload["continuation"] = _continuation(
-                "list_external_dir", path=str(path), offset=next_offset, limit=limit,
-            )
-        return _ok(**payload)
-
-    _register(
-        reg,
-        name="list_external_dir",
-        description=(
-            msg("tools_knowe.py.056")
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": msg("tools_knowe.py.057")},
-                "offset": {"type": "integer", "minimum": 0},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-            },
-            "required": ["path"],
-        },
-        handler=handle_list_external,
-    )
 
 
 def _register_project_memory_readonly(
@@ -1744,7 +1617,6 @@ def build_coordinator_registry(engine: "ProjectEngine") -> ToolRegistry:
     _register_knowledge_readonly(reg, engine, role="coordinator")
     _register_readonly(reg, engine, role="coordinator")
     _register_coordinator_eyes(reg, engine)          # [v0.29 问题三] 他自己有眼睛
-    _register_external_readonly(reg, engine, role="coordinator")
     return reg
 
 
@@ -1762,9 +1634,9 @@ def build_coordinator_registry(engine: "ProjectEngine") -> ToolRegistry:
 #     `safe_read_file` / `safe_list_dir` / `safe_search_files` 全部注册在
 #     `build_worker_registry` 里，**项目经理的注册表里从来没有过它们**。
 #
-#   铁证在这个文件的 `_register_external_readonly` 里：项目经理拿目录外工具去读项目内
-#   路径时，代码回他一句「请使用**项目经理已有的项目只读工具**」——
-#   而那个工具**不存在**。我们对着模型指了一样不存在的东西，然后怪它不用。
+#   旧实现曾让项目经理拿“目录外读取”工具去读项目内路径，并回一句
+#   「请使用项目经理已有的项目只读工具」——但那个工具当时并不存在。
+#   现在目录外读取已从协调器注册表移除，协调器只保留下面这些项目内只读工具。
 #
 #   所以那句「抱歉，我这边目前看不到项目目录里具体有哪些文件」**不是偷懒，是实话**。
 #   他拉一个 agent 去扫目录，是在他那个工具箱里**唯一能做的正确动作**。
@@ -1843,9 +1715,8 @@ def _register_coordinator_eyes(reg: ToolRegistry, engine: "ProjectEngine") -> No
                 skipped.append(child.name)
                 continue
             try:
-                if child.is_symlink():
-                    kind, size = "symlink", None
-                elif child.is_dir():
+                _reject_filesystem_alias(child, label="project paths")
+                if child.is_dir():
                     kind, size = "dir", None
                 elif child.is_file():
                     kind, size = "file", child.stat().st_size
@@ -2252,8 +2123,9 @@ def _project_path(
         for part in Path(rest).parts:
             lexical = lexical / part
             try:
-                if lexical.is_symlink():
-                    raise ToolError(f"symbolic links are not allowed in internal paths: {rel}")
+                _reject_filesystem_alias(lexical, label="internal paths")
+            except ValueError as exc:
+                raise ToolError(str(exc)) from None
             except OSError as exc:
                 raise ToolError(f"cannot inspect internal path {rel}: {exc}") from None
         return target, rel
@@ -2271,8 +2143,9 @@ def _project_path(
             continue
         lexical = lexical / part
         try:
-            if lexical.is_symlink():
-                raise ToolError(f"symbolic links are not allowed in Worker file paths: {rel}")
+            _reject_filesystem_alias(lexical, label="Worker file paths")
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
         except OSError as exc:
             raise ToolError(f"cannot inspect project path {rel}: {exc}") from None
     target = resolve_in_sandbox(root, rel, role="worker", operation=operation)
@@ -2464,8 +2337,9 @@ def _external_path(
     for part in lexical.parts[1:]:
         cursor = cursor / part
         try:
-            if cursor.is_symlink():
-                raise ToolError("external symbolic links are not allowed")
+            _reject_filesystem_alias(cursor, label="external paths")
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
         except OSError as exc:
             raise ToolError(f"cannot inspect external path: {exc}") from None
     path = _resolve_external_read(raw)
@@ -2738,7 +2612,9 @@ def build_worker_registry(
         for child in children:
             if path == root and child.name in _LEGACY_INTERNAL_DIRS:
                 continue
-            if child.is_symlink():
+            try:
+                _reject_filesystem_alias(child, label="project paths")
+            except ValueError:
                 continue
             try:
                 child_rel = child.relative_to(root).as_posix()
@@ -2976,7 +2852,9 @@ def build_worker_registry(
         limit = _integer(args, "limit", 100, minimum=1, maximum=500)
         rows: list[dict[str, Any]] = []
         for child in sorted(path.iterdir(), key=lambda item: item.name.casefold()):
-            if child.is_symlink():
+            try:
+                _reject_filesystem_alias(child, label="external paths")
+            except ValueError:
                 continue
             try:
                 if hasattr(engine, "internal_workspace") and _is_internal_storage_path(engine, child):
@@ -3467,7 +3345,7 @@ def build_worker_registry(
                 "code": "browser_unavailable",
                 "message": "Browser service is disabled for this installation.",
             }
-        url = browser_tools.check_url(args.get("url"))
+        url = await browser_tools.validate_url(args.get("url"))
         wait_until = str(args.get("wait_until") or "domcontentloaded")
         if wait_until not in {"load", "domcontentloaded", "networkidle", "commit"}:
             raise ToolError("wait_until must be load, domcontentloaded, networkidle, or commit")

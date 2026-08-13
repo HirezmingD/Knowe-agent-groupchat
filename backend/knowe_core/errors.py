@@ -9,6 +9,8 @@ instead of an empty ``Exception.__str__`` value.
 
 from __future__ import annotations
 
+from knowe_core.redaction import redact_sensitive_text
+
 
 class KnoweError(Exception):
     """Base exception for Knowe Agent Core."""
@@ -34,11 +36,13 @@ class ProviderError(KnoweError):
     ) -> None:
         # Some httpx/httpcore exceptions intentionally have an empty ``str(exc)``.  Never
         # let that erase the only diagnostic that reaches a non-technical user.
-        normalized = str(message or "").strip() or self.__class__.__name__
+        normalized = redact_sensitive_text(message).strip() or self.__class__.__name__
         super().__init__(normalized)
         self.message = normalized
         self.status_code = status_code
-        self.response_body = response_body
+        self.response_body = (
+            redact_sensitive_text(response_body, limit=500) if response_body else response_body
+        )
         self.retryable = (
             bool(self.default_retryable) if retryable is None else bool(retryable)
         )

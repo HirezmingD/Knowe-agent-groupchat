@@ -60,14 +60,16 @@ function extensionOf(file: PreviewFilePayload): string {
 /**
  * 文件预览分类。
  *
- * 文本与表格的边界按产品规则固定：CSV/TSV/TXT/LOG 一律文本，XLS/XLSX 一律表格；
- * HTML 不落入代码预览，JSON 明确落入代码预览。
+ * 文本与表格的边界按产品规则固定：CSV/TSV/TXT/LOG 一律文本，XLSX 为表格；
+ * 旧式二进制 XLS 不交给 OOXML 解析器，明确降级到通用文件卡片。HTML 不落入代码预览，
+ * JSON 明确落入代码预览。
  */
 export function kindOf(file: PreviewFilePayload): PreviewKind {
   const ext = extensionOf(file);
   const filename = baseName(file.name || file.path || '').toLowerCase();
   if (TEXT_EXTS.has(ext)) return 'text';
-  if (ext === 'xlsx' || ext === 'xls') return 'sheet';
+  if (ext === 'xls') return 'file';
+  if (ext === 'xlsx') return 'sheet';
   if (ext === 'html' || ext === 'htm') return 'html';
   if (ext === 'md' || ext === 'markdown' || ext === 'mdown' || ext === 'mkd') return 'markdown';
   if (IMAGE_EXTS.has(ext)) return 'image';

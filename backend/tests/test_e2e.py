@@ -71,12 +71,22 @@ class Conn:
 
 
 @pytest.fixture
-async def server():
-    srv = KnoweServer()
+async def server(tmp_path: Path):
+    # Keep the test's install/private-data roots disjoint from the business workspace;
+    # production now rejects every parent/child overlap by design.
+    install_root = tmp_path / "fake-install"
+    install_root.mkdir()
+    object.__setattr__(CONFIG, "install_root", str(install_root))
+    srv = KnoweServer(data_dir=str(tmp_path / "knowe-data"))
     # Unknown replay ids are intentionally rejected by the current identity contract.
     # Seed one real canonical project so E2E tests exercise transport/replay rather than
     # relying on the retired "handshake materialises a project" side effect.
-    await srv.create_project(DEMO_ID, "端到端测试项目")
+    project_parent = tmp_path / "business-projects"
+    project_parent.mkdir()
+    srv.test_project_parent = project_parent  # type: ignore[attr-defined]
+    project_dir = project_parent / "demo-project"
+    project_dir.mkdir()
+    await srv.create_project(DEMO_ID, "端到端测试项目", project_dir=str(project_dir))
     async with serve(srv.handle, "127.0.0.1", 0) as ws_server:
         port = ws_server.sockets[0].getsockname()[1]
         srv.test_port = port  # type: ignore[attr-defined]
@@ -88,6 +98,13 @@ async def server():
 async def connect(srv) -> Conn:
     ws = await websockets.connect(f"ws://127.0.0.1:{srv.test_port}")
     return Conn(ws)
+
+
+def new_project_dir(srv, name: str) -> str:
+    """Allocate a peer-disjoint business root for create-project E2E frames."""
+    path = Path(srv.test_project_parent) / name
+    path.mkdir()
+    return str(path)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -120,7 +137,12 @@ async def test_replay_backfills_project_created_and_history(server):
     # 第一个客户端建项目、发一条消息
     c1 = await connect(server)
     await c1.handshake(DEMO_ID)
-    await c1.send(type="create_project", project_id=PROJECT_ONE_ID, project_name="官网改版")
+    await c1.send(
+        type="create_project",
+        project_id=PROJECT_ONE_ID,
+        project_name="官网改版",
+        project_dir=new_project_dir(server, "project-one"),
+    )
     await c1.wait_for("project_created", project_id=PROJECT_ONE_ID)
     await c1.send(type="user_message", project_id=PROJECT_ONE_ID, content="你好", client_msg_id="cm_1")
     await c1.wait_for("message", project_id=PROJECT_ONE_ID)
@@ -186,7 +208,12 @@ async def test_events_from_other_projects_are_also_broadcast(server):
     """所有事件广播给所有客户端（含别的项目的）——前端按 project_id 自己路由。"""
     c = await connect(server)
     await c.handshake(DEMO_ID)
-    await c.send(type="create_project", project_id=PROJECT_TWO_ID, project_name="别的项目")
+    await c.send(
+        type="create_project",
+        project_id=PROJECT_TWO_ID,
+        project_name="别的项目",
+        project_dir=new_project_dir(server, "project-two"),
+    )
     await c.wait_for("project_created", project_id=PROJECT_TWO_ID)
     await c.send(type="user_message", project_id=PROJECT_TWO_ID, content="嗨", client_msg_id="cm_2")
 
@@ -338,8 +365,18 @@ async def test_request_snapshot_returns_state_snapshot(server):
 async def test_two_projects_have_independent_seq(server):
     c = await connect(server)
     await c.handshake(DEMO_ID)
-    await c.send(type="create_project", project_id=PROJECT_A_ID, project_name="甲")
-    await c.send(type="create_project", project_id=PROJECT_B_ID, project_name="乙")
+    await c.send(
+        type="create_project",
+        project_id=PROJECT_A_ID,
+        project_name="甲",
+        project_dir=new_project_dir(server, "project-a"),
+    )
+    await c.send(
+        type="create_project",
+        project_id=PROJECT_B_ID,
+        project_name="乙",
+        project_dir=new_project_dir(server, "project-b"),
+    )
     await c.wait_for("project_created", project_id=PROJECT_B_ID)
 
     await c.send(type="user_message", project_id=PROJECT_A_ID, content="甲的话", client_msg_id="a1")
@@ -435,95 +472,70 @@ def _http_parts(raw: bytes) -> tuple[int, dict[str, str], bytes]:
     return status, headers, body
 
 
-async def test_isolated_html_preview_origin_capabilities_and_security(tmp_path: Path):
-    """HTML gets browser resources, while project code cannot enter the control plane."""
+async def test_legacy_preview_tree_is_retired_and_preview_remains_authenticated(tmp_path: Path):
+    """Legacy Host/_kpt capabilities never bypass auth or revive the tree endpoint."""
     srv = KnoweServer(data_dir="")
     project_a = PROJECT_A_ID
-    project_b = PROJECT_B_ID
     root_a = tmp_path / "a"
-    root_b = tmp_path / "b"
-    (root_a / "assets").mkdir(parents=True)
-    root_b.mkdir()
-    (root_a / "index.html").write_text(
-        '<script type="module" src="/assets/app.js"></script>', encoding="utf-8",
-    )
-    (root_a / "assets" / "app.js").write_text(
-        'fetch("/assets/data.json"); new Worker("/assets/worker.js");', encoding="utf-8",
-    )
-    (root_a / "assets" / "data.json").write_text('{"ok":true}', encoding="utf-8")
-    (root_a / "assets" / "worker.js").write_text('postMessage("ok")', encoding="utf-8")
-    (root_b / "secret.txt").write_text("other project", encoding="utf-8")
+    root_a.mkdir()
+    preview_body = b"<h1>authenticated preview</h1>"
+    (root_a / "index.html").write_bytes(preview_body)
     srv.hub.get_or_create(project_a, "A")
-    srv.hub.get_or_create(project_b, "B")
     srv.engines[project_a] = SimpleNamespace(workspace_root=root_a)
-    srv.engines[project_b] = SimpleNamespace(workspace_root=root_b)
 
     health = await asyncio.start_server(srv._health_conn, "127.0.0.1", 0)
     port = health.sockets[0].getsockname()[1]
-    token_a = srv._preview_origin_token(project_a)
-    host_a = f"p-{token_a}.preview.localhost:8081"
+    legacy_capability = "a" * 32
+    host_a = f"p-{legacy_capability}.preview.localhost:8081"
+    tree_path = f"/preview/tree/{project_a}/index.html"
 
     try:
+        # The retired preview Host label is ordinary untrusted request metadata.  It
+        # cannot bypass the one runtime authentication boundary shared by every route.
         raw = await _raw_http(
             port,
-            f"GET /preview/tree/{project_a}/index.html HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode(),
-        )
-        status, headers, body = _http_parts(raw)
-        assert status == 200 and b'type="module"' in body
-        assert "access-control-allow-origin" not in headers
-        assert headers["cross-origin-resource-policy"] == "same-origin"
-        csp = headers["content-security-policy"]
-        assert "script-src" in csp and "connect-src" in csp and "worker-src" in csp
-        assert "http:" in csp and "https:" in csp
-        assert "object-src 'none'" in csp
-
-        # The first validated tree request binds root-relative resources to project A.
-        raw = await _raw_http(
-            port,
-            f"GET /assets/app.js HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode(),
-        )
-        status, headers, body = _http_parts(raw)
-        assert status == 200 and b"new Worker" in body
-        assert headers["cross-origin-resource-policy"] == "same-origin"
-
-        # A project-A origin cannot switch the explicit tree path to project B.
-        raw = await _raw_http(
-            port,
-            f"GET /preview/tree/{project_b}/secret.txt HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode(),
-        )
-        status, _, _ = _http_parts(raw)
-        assert status == 403
-
-        raw = await _raw_http(
-            port,
-            f"GET /preview/tree/{project_a}/%2e%2e/secret.txt HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode(),
-        )
-        status, _, _ = _http_parts(raw)
-        assert status == 403
-
-        # On an isolated Host, a control-looking pathname is only a project file lookup.
-        raw = await _raw_http(
-            port,
-            f"GET /settings HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode(),
-        )
-        status, headers, body = _http_parts(raw)
-        assert status == 404
-        assert b"feature_flags" not in body
-        assert "access-control-allow-origin" not in headers
-
-        # Direct calls to the real control Host are rejected using browser provenance.
-        origin = f"http://{host_a}"
-        raw = await _raw_http(
-            port,
-            (
-                "GET /settings HTTP/1.1\r\n"
-                "Host: 127.0.0.1:8081\r\n"
-                f"Origin: {origin}\r\n\r\n"
-            ).encode(),
+            f"GET {tree_path} HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode(),
         )
         status, headers, body = _http_parts(raw)
         assert status == 401 and b"runtime_auth_required" in body
         assert "access-control-allow-origin" not in headers
+
+        # The retired query capability is ignored as well; only the runtime token is
+        # authentication material for the local HTTP surface.
+        raw = await _raw_http(
+            port,
+            (
+                f"GET {tree_path}?_kpt={legacy_capability} HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n\r\n"
+            ).encode(),
+        )
+        status, _, body = _http_parts(raw)
+        assert status == 401 and b"runtime_auth_required" in body
+
+        # Authentication does not restore the removed service surface.
+        raw = await _raw_http(
+            port,
+            (
+                f"GET {tree_path} HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                f"X-Knowe-Runtime-Token: {CONFIG.runtime_token}\r\n\r\n"
+            ).encode(),
+        )
+        status, _, body = _http_parts(raw)
+        assert status == 404 and b"not found" in body
+
+        # The supported preview endpoint remains available after authentication.
+        raw = await _raw_http(
+            port,
+            (
+                f"GET /preview?project_id={project_a}&path=index.html HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                f"X-Knowe-Runtime-Token: {CONFIG.runtime_token}\r\n\r\n"
+            ).encode(),
+        )
+        status, headers, body = _http_parts(raw)
+        assert status == 200 and body == preview_body
+        assert headers["content-type"].startswith("text/html")
     finally:
         health.close()
         await health.wait_closed()

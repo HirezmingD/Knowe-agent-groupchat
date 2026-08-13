@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { ReasoningPanel } from './ReasoningPanel';
 import '../i18n';   // 初始化 react-i18next（测试环境 i18n 实例）
 
@@ -37,6 +37,7 @@ describe('ReasoningPanel [v1.0.23.5_2] 折叠零 DOM', () => {
   });
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
   });
 
   const LONG = '第一段思考内容\n\n第二段思考内容\n\n第三段思考内容';
@@ -65,11 +66,13 @@ describe('ReasoningPanel [v1.0.23.5_2] 折叠零 DOM', () => {
   });
 
   it('再次点击折叠 → 正文卸载回零 DOM', () => {
+    vi.useFakeTimers();
     const { container } = render(<ReasoningPanel text={LONG} seconds={5} />);
     fireEvent.click(screen.getByRole('button'));
     expect(container.querySelector('.reasoning-scroll')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button'));
+    act(() => { vi.advanceTimersByTime(620); });
     expect(container.querySelector('.reasoning-scroll')).toBeNull();
     expect(screen.queryAllByTestId('md-para')).toHaveLength(0);
   });
@@ -83,11 +86,13 @@ describe('ReasoningPanel [v1.0.23.5_2] 折叠零 DOM', () => {
   });
 
   it('live 从 true 变 false：自动折叠 → 正文卸载', () => {
+    vi.useFakeTimers();
     const { container, rerender } = render(<ReasoningPanel text={LONG} live />);
     expect(container.querySelector('.reasoning-scroll')).not.toBeNull();
 
     // rerender 后 effect（live→false 自动折叠）在 act 内 flush
     rerender(<ReasoningPanel text={LONG} seconds={5} />);
+    act(() => { vi.advanceTimersByTime(620); });
     expect(container.querySelector('.reasoning-scroll')).toBeNull();
   });
 });

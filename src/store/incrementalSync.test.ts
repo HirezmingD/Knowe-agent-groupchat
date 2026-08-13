@@ -61,7 +61,7 @@ describe('incrementalSync · HTTP 增量预热', () => {
     // 1. store 已注入 2 条消息（纯数据，convs 存在）
     const conv = useKnoweStore.getState().convs['proj-a'];
     expect(conv).toBeDefined();
-    expect(conv.items.filter((i) => i.kind === 'agent')).toHaveLength(2);
+    expect(conv!.items.filter((i) => i.kind === 'agent')).toHaveLength(2);
 
     // 2. socket 水位抬升到 5
     expect(notes).toEqual([['proj-a', 5]]);

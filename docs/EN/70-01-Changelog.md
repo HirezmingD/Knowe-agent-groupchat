@@ -7,11 +7,11 @@
 
 # 70 Releases · Changelog
 
-> **At a glance**: this page records Knowe updates in reverse version order — the current version **v1.0.25** is the main entry, labeled by **New features / Fixes / Behavior changes**; records for earlier versions (v1.0.24 and before) follow the product's actual state and are supplemented at the documentation's release pace. Want to know "should I upgrade", "where do I see the version number", "how often is the changelog updated" — see [Common questions](#common-questions) on this page; want to pick your focus by role — see [What this version means for you](#what-this-version-means-for-you).
+> **At a glance**: the current hardened desktop build is **v1.0.34**. It adds an OS-enforced terminal boundary, encrypted credential storage, dependency remediation, and stricter Electron/browser isolation.
 
 **On this page**
 
-- [Current version: v1.0.25](#current-version-v1025)
+- [Current version: v1.0.34](#current-version-v1034)
 - [Earlier versions (v1.0.24 and before)](#earlier-versions-v1024-and-before)
 - [What this version means for you](#what-this-version-means-for-you)
 - [Common questions](#common-questions)
@@ -19,7 +19,18 @@
 
 ---
 
-## Current version: v1.0.25
+## Current version: v1.0.34
+
+- Agent shell, background process, and Python execution now fail closed through Microsoft Execution Containers plus a Windows Job Object supervisor. The workspace is the only writable root; network and inherited host secrets are blocked.
+- Provider API Keys and credential fingerprints are encrypted at rest with current-user Windows DPAPI. The encrypted primary and backup are integrity-checked and explicit key clearing updates both slots.
+- Electron remote debugging is disabled in packaged builds, renderer windows use Chromium's OS sandbox, IPC is top-frame/window scoped, and project HTML does not receive the preload bridge.
+- The Electron binary disables Node Inspector, `RunAsNode`, and `NODE_OPTIONS` and loads only an integrity-validated ASAR. Third-party upstream auto-update is paused by default so an un-gated release cannot overwrite the hardened boundary.
+- Browser and web tools use an IP-pinned public-egress proxy that rejects loopback, private, link-local, transition, and NAT64 destinations on every redirect/request.
+- Electron and build dependencies were upgraded; the vulnerable legacy spreadsheet package was removed. Clean install/build inputs are locked and audited.
+
+---
+
+## Earlier feature baseline: v1.0.25
 
 > **Note**: this page is the changelog published with the documentation for the first time; the v1.0.25 entry covers the **feature surface of the current version**. Version numbering follows the whole documentation (the v1.0.25.x series — see [30 Configuration · Account and Identity · About: version and build info](30-04-Account-and-Identity.md#about-version-and-build-info)); the entries below are labeled by **New features / Fixes / Behavior changes**.
 

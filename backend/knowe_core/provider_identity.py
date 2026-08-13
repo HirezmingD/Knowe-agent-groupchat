@@ -18,6 +18,8 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+from knowe_core.redaction import redact_sensitive_text
+
 _PROVIDER_LABELS: dict[str, str] = {
     "openrouter": "OpenRouter",
     "deepseek": "DeepSeek",
@@ -100,7 +102,12 @@ def provider_target(
     return f"{label}（{model_name}）" if model_name else label
 
 
-def _clean_response_detail(body: Any, *, limit: int = 180) -> str:
+def _clean_response_detail(
+    body: Any,
+    *,
+    limit: int = 180,
+    secrets: tuple[str, ...] = (),
+) -> str:
     """从厂商响应里提炼一小段可读说明，避免把整坨 JSON 直接甩给用户。"""
     text = str(body or "").strip()
     if not text:
@@ -135,10 +142,7 @@ def _clean_response_detail(body: Any, *, limit: int = 180) -> str:
                 break
 
     text = re.sub(r"\s+", " ", text).strip()
-    # 极端情况下服务端可能回显 Authorization；做一道通用遮蔽再展示。
-    text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+\-/=]+", "Bearer ***", text)
-    text = re.sub(r"\bsk-[A-Za-z0-9._-]{8,}\b", "sk-***", text)
-    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+    return redact_sensitive_text(text, secrets=secrets, limit=limit)
 
 
 def _detail_for_rebuilt_message(error_text: str) -> str:
@@ -171,10 +175,11 @@ def http_status_error_message(
     base_url: str | None = None,
     model: str | None = None,
     response_body: Any = "",
+    secrets: tuple[str, ...] = (),
 ) -> str:
     """把一次 provider HTTP 失败翻译成绑定感知、可执行的中文说明。"""
     target = provider_target(provider, base_url, model)
-    detail = _clean_response_detail(response_body)
+    detail = _clean_response_detail(response_body, secrets=secrets)
     detail_suffix = f" 服务端说明：{detail}" if detail else ""
 
     if status_code == 401:

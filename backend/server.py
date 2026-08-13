@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import hmac
 import json
 import logging
@@ -45,7 +44,7 @@ from datetime import datetime            # [v0.38] /history 按日期过滤 & ts
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, unquote, urlsplit   # [v0.36] 解析 /preview?project_id=&path=
+from urllib.parse import parse_qs, unquote, urlsplit   # [v0.36] 解析 /preview?project_id=&path=
 
 import websockets
 
@@ -291,7 +290,11 @@ from .storage_maintenance import run_all_maintenance  # [v1.0.31 R2/R3] 流水�
 from .token_usage import aggregate_token_usage
 from knowe_core.provider_client import normalize_usage_buckets
 from .token_pricing import estimate_cost
-from .workspace_layout import internal_workspace_for
+from .workspace_layout import (
+    internal_workspace_for,
+    validate_peer_separation,
+    validate_separation,
+)
 from .platform_manifest import PlatformManifest   # [v0.12 D 5e] 平台清单 + 变更日志
 from .privacy import sanitize_events
 from .i18n_backend import msg
@@ -431,11 +434,6 @@ class KnoweServer:
         #   不记的话，重启之后所有项目的沙箱都会悄悄退回默认目录，
         #   用户会发现「昨天写在我文件夹里的东西，今天 Agent 找不到了」。
         self.project_dirs: dict[str, str] = {}
-        # Isolated HTML preview hosts are capability labels, not control endpoints.
-        # The mapping exists only to resolve root-relative resources ("/assets/app.js")
-        # back into the already-validated current project tree.
-        self._preview_origin_projects: dict[str, str] = {}
-
         # [v0.44.8] 群聊列表偏好是项目配置的一部分，后端是唯一真源。
         # project_id → {pinned, muted, folded, pinned_at}；pinned/folded 互斥。
         self.conversation_states: dict[str, dict[str, Any]] = {}
@@ -527,6 +525,31 @@ class KnoweServer:
     def _internal_workspace_for(self, project_id: str) -> Path:
         """Stable internal root; independent from the user-selected business directory."""
         return internal_workspace_for(self.data_root, project_id)
+
+    def _validate_business_workspace(self, project_id: str, value: str) -> str:
+        """Enforce separation before an Agent receives any project capability."""
+
+        workspace = Path(value).expanduser().resolve(strict=True)
+        protected: list[Path | str] = [self.data_root]
+        install_root = str(getattr(CONFIG, "install_root", "") or "").strip()
+        if install_root:
+            protected.append(install_root)
+        validate_separation(
+            workspace,
+            self._internal_workspace_for(project_id),
+            protected_roots=tuple(protected),
+        )
+        peer_roots: list[Path | str] = []
+        for peer_id, raw_peer in self.project_dirs.items():
+            if peer_id == project_id:
+                continue
+            try:
+                peer = Path(raw_peer).expanduser().resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            peer_roots.append(peer)
+        validate_peer_separation(workspace, tuple(peer_roots))
+        return str(workspace)
 
     @property
     def _zinnia_welcome_path(self) -> Path | None:
@@ -1398,7 +1421,13 @@ class KnoweServer:
                 path = Path(raw).expanduser()
                 exists = False
             if exists:
-                self._mark_project_dir_valid(project_id, str(path))
+                try:
+                    clean = self._validate_business_workspace(project_id, str(path))
+                except (OSError, ValueError) as exc:
+                    self._mark_project_dir_invalid(project_id, str(path), "unsafe_overlap")
+                    log.warning("[%s] 项目目录与 Knowe 私有数据重叠，已隔离：%s", project_id, exc)
+                    continue
+                self._mark_project_dir_valid(project_id, clean)
             else:
                 self._mark_project_dir_invalid(project_id, str(path), "missing")
                 log.warning("[%s] 项目目录失效：%s（项目引擎将保持关闭）", project_id, path)
@@ -1417,8 +1446,11 @@ class KnoweServer:
             return True
 
         try:
-            valid = Path(raw).expanduser().resolve().is_dir()
-        except OSError:
+            resolved = Path(raw).expanduser().resolve()
+            valid = resolved.is_dir()
+            if valid:
+                self._validate_business_workspace(project_id, str(resolved))
+        except (OSError, ValueError):
             valid = False
         if not valid:
             self._mark_project_dir_invalid(project_id, raw, "missing")
@@ -2918,6 +2950,11 @@ class KnoweServer:
             return
 
         resolved = self._existing_project_dir(raw_dir)
+        if resolved is not None:
+            try:
+                resolved = self._validate_business_workspace(project_id, resolved)
+            except (OSError, ValueError):
+                resolved = None
         if resolved is None:
             # [v0.13 fix] 用户已重新打开弹窗并尝试选目录 → 不再是“暂缓”状态；
             #   只是这次选的目录无效，就地把弹窗再递一次让他重选。
@@ -2931,6 +2968,22 @@ class KnoweServer:
 
         # 先停旧引擎，再更新根目录；旧目录不删不改。
         await self._quarantine_project(project_id)
+
+        # quarantine_project() 会 await 引擎退出；等待期间另一个项目可能已经提交了
+        # 与本目录相同或互相包含的新根目录。提交前必须基于最新 project_dirs 再校验
+        # 一次，避免两个并发恢复请求都用旧快照通过隔离边界。
+        try:
+            resolved = self._validate_business_workspace(project_id, resolved)
+        except (OSError, ValueError):
+            self._mark_project_dir_invalid(
+                project_id,
+                self.project_dirs.get(project_id, raw_dir),
+                "replacement_conflict",
+            )
+            await self._server_error(client, msg("server.py.268"))
+            await self.hub.emit_no_seq(self._directory_popup(project_id))
+            return
+
         old_request_id = expected if isinstance(expected, str) else f"dir_{project_id}"
         self.project_dirs[project_id] = resolved
         self._save_project_dirs()
@@ -3383,6 +3436,7 @@ class KnoweServer:
 
         resolved = _clean_project_dir(project_dir)
         if resolved is not None:
+            resolved = self._validate_business_workspace(project_id, resolved)
             self.project_dirs[project_id] = resolved
             self._save_project_dirs()
             self._mark_project_dir_valid(project_id, resolved)
@@ -3708,29 +3762,6 @@ class KnoweServer:
     #: 把一个 500MB 的文件整个读进内存塞给渲染进程，是拿体验换崩溃。
     _PREVIEW_MAX_BYTES = 64 * 1024 * 1024
 
-    _PREVIEW_HOST_RE = re.compile(
-        r"^p-([0-9a-f]{32})\.preview\.localhost(?::\d{1,5})?$",
-        re.IGNORECASE,
-    )
-
-    @staticmethod
-    def _preview_origin_token(project_id: str) -> str:
-        return hashlib.sha256(project_id.encode("utf-8")).hexdigest()[:32]
-
-    @classmethod
-    def _preview_host_token(cls, host: str) -> str | None:
-        match = cls._PREVIEW_HOST_RE.fullmatch(host.strip().lower())
-        return match.group(1).lower() if match else None
-
-    @classmethod
-    def _is_preview_origin(cls, raw: str) -> bool:
-        if not raw:
-            return False
-        try:
-            return cls._preview_host_token(urlsplit(raw).netloc) is not None
-        except ValueError:
-            return False
-
     @staticmethod
     def _configured_renderer_origins() -> set[str]:
         """Exact app origins allowed to read the local desktop HTTP surface."""
@@ -3790,34 +3821,6 @@ class KnoweServer:
 
             split = urlsplit(raw_target)
             path = split.path
-            host = headers.get("host", "")
-            preview_token = self._preview_host_token(host)
-            # Fallback: extract preview token from query param when Host header lacks it
-            # (e.g. Windows where *.preview.localhost DNS doesn't resolve)
-            if preview_token is None:
-                query_params = parse_qs(split.query)
-                kpt = query_params.get('_kpt', [None])[0]
-                if kpt and re.fullmatch(r'[0-9a-f]{32}', kpt):
-                    preview_token = kpt
-
-            # An isolated preview origin is a static, read-only project resource surface.
-            if preview_token is not None:
-                if method != "GET":
-                    self._write_http(
-                        writer,
-                        b"405 Method Not Allowed",
-                        b'{"error":"preview origin is read-only"}',
-                        b"application/json",
-                        cors=False,
-                    )
-                else:
-                    await self._serve_preview_tree(
-                        writer,
-                        path,
-                        preview_token=preview_token,
-                    )
-                await writer.drain()
-                return
 
             supplied_token = headers.get("x-knowe-runtime-token", "")
             # WebSocket 升级请求无法通过 Electron webRequest 注入 header，
@@ -3885,8 +3888,6 @@ class KnoweServer:
                 "/api/events": {"GET"},   # [v1.0.23.6] 增量读取（HTTP 旁路，不碰 WS 状态机）
             }
             allowed_methods = exact_route_methods.get(path)
-            if allowed_methods is None and path.startswith("/preview/tree/"):
-                allowed_methods = {"GET"}
             if allowed_methods is None and path.startswith("/api/knowledge"):
                 allowed_methods = {"GET", "POST"}
 
@@ -3990,7 +3991,12 @@ class KnoweServer:
                 #   POST /settings       → 整包应用 + 落盘 + 通知各引擎热更新
                 #   POST /settings/test  → 对一份绑定真发最小请求（连接测试，禁 mock）
                 if path == "/settings" and method == "GET":
-                    snapshot = runtime_settings.api_snapshot(welcome_state=self._welcome_state())
+                    try:
+                        snapshot = runtime_settings.api_snapshot(welcome_state=self._welcome_state())
+                    except runtime_settings.SettingsStorageUnavailable:
+                        self._serve_settings_storage_unavailable(writer)
+                        await writer.drain()
+                        return
                     snapshot["restart_required"] = self._settings_restart_required
                     snapshot["feature_flags"] = feature_flag_snapshot()
                     body = json.dumps(snapshot, ensure_ascii=False).encode()
@@ -4049,11 +4055,6 @@ class KnoweServer:
 
                 if path == "/files/reveal" and method == "POST":
                     await self._serve_file_reveal(writer, body_bytes)
-                    await writer.drain()
-                    return
-
-                if method == "GET" and path.startswith("/preview/tree/"):
-                    await self._serve_preview_tree(writer, path, preview_token=None)
                     await writer.drain()
                     return
 
@@ -5472,6 +5473,24 @@ class KnoweServer:
 
     # ── [v0.44 设置] POST /settings：整包应用 ──────────────────────
 
+    def _serve_settings_storage_unavailable(self, writer: asyncio.StreamWriter) -> None:
+        """Return one fixed, credential-safe failure for an unreadable protected store."""
+
+        body = json.dumps(
+            {
+                "ok": False,
+                "error": "credential_store_unavailable",
+                "message": "凭据存储不可用；原设置文件未被覆盖",
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self._write_http(
+            writer,
+            b"503 Service Unavailable",
+            body,
+            b"application/json; charset=utf-8",
+        )
+
     async def _serve_settings_apply(self, writer: asyncio.StreamWriter,
                                     body_bytes: bytes) -> None:
         try:
@@ -5491,6 +5510,9 @@ class KnoweServer:
 
         try:
             runtime_settings.apply(payload, canonical_pid=_norm_pid)
+        except runtime_settings.SettingsStorageUnavailable:
+            self._serve_settings_storage_unavailable(writer)
+            return
         except runtime_settings.SettingsApplyConflict as exc:
             body = json.dumps(
                 {
@@ -5560,6 +5582,9 @@ class KnoweServer:
             binding = runtime_settings.binding_for_test(target, binding)
             if binding is None:
                 raise ValueError(msg("server.py.296"))
+        except runtime_settings.SettingsStorageUnavailable:
+            self._serve_settings_storage_unavailable(writer)
+            return
         except (ValueError, UnicodeDecodeError) as exc:
             self._preview_error(writer, b"400 Bad Request", msg("server.py.328", exc=exc))
             return
@@ -5864,164 +5889,6 @@ class KnoweServer:
             ensure_ascii=False,
         ).encode()
         self._write_http(writer, b"200 OK", body, b"application/json; charset=utf-8")
-
-    def _preview_tree_request(self, request_path: str) -> tuple[str, str]:
-        """解析树形预览地址；只解码一次，路径安全仍交给统一沙箱解析器。"""
-        prefix = "/preview/tree/"
-        if not request_path.startswith(prefix):
-            raise ValueError(msg("server.py.299"))
-        encoded = request_path[len(prefix):]
-        encoded_project, separator, encoded_path = encoded.partition("/")
-        if not separator or not encoded_project or not encoded_path:
-            raise ValueError(msg("server.py.221"))
-
-        if (
-            re.search(r"%(?![0-9A-Fa-f]{2})", encoded_project)
-            or re.search(r"%(?![0-9A-Fa-f]{2})", encoded_path)
-        ):
-            raise ValueError(msg("server.py.300"))
-        try:
-            project_id = unquote(encoded_project, errors="strict").strip()
-            rel_path = unquote(encoded_path, errors="strict")
-        except UnicodeDecodeError as exc:
-            raise ValueError(msg("server.py.301")) from exc
-        normalized = rel_path.replace("\\", "/")
-        if (
-            not project_id
-            or not rel_path
-            or "\x00" in project_id
-            or "\x00" in rel_path
-            or normalized.startswith("/")
-            or re.match(r"^[A-Za-z]:", normalized)
-        ):
-            raise ValueError(msg("server.py.302"))
-        parts = normalized.split("/")
-        if any(part in {"", ".", ".."} for part in parts):
-            raise ValueError(msg("server.py.303"))
-        return project_id, normalized
-
-    def _preview_root_request(
-        self,
-        request_path: str,
-        project_id: str,
-    ) -> tuple[str, str]:
-        """Resolve root-relative URLs on an isolated per-project origin."""
-
-        encoded_path = request_path.lstrip("/") or "index.html"
-        return self._preview_tree_request(
-            f"/preview/tree/{quote(project_id, safe='')}/{encoded_path}",
-        )
-
-    async def _serve_preview_tree(
-        self,
-        writer: asyncio.StreamWriter,
-        request_path: str,
-        *,
-        preview_token: str | None,
-    ) -> None:
-        """Serve project web resources only from an isolated per-project origin."""
-        if preview_token is None:
-            self._preview_error(
-                writer,
-                b"403 Forbidden",
-                msg("server.py.304"),
-                cors=False,
-            )
-            return
-        try:
-            if request_path.startswith("/preview/tree/"):
-                project_id, rel_path = self._preview_tree_request(request_path)
-            else:
-                mapped_project = self._preview_origin_projects.get(preview_token)
-                if not mapped_project:
-                    raise ProjectIdResolutionError(msg("server.py.305"))
-                project_id, rel_path = self._preview_root_request(request_path, mapped_project)
-
-            canonical, target, _meta = self._resolve_preview_target(project_id, rel_path)
-            expected_token = self._preview_origin_token(canonical)
-            if preview_token is not None and preview_token != expected_token:
-                raise ValueError(msg("server.py.306"))
-            self._preview_origin_projects[expected_token] = canonical
-
-            if target.is_dir():
-                rel_path = f"{rel_path.rstrip('/')}/index.html"
-                canonical, target, _meta = self._resolve_preview_target(canonical, rel_path)
-            stat = target.stat()
-        except ProjectIdResolutionError as exc:
-            self._preview_error(writer, b"404 Not Found", str(exc), cors=False)
-            return
-        except ValueError as exc:
-            self._preview_error(writer, b"403 Forbidden", str(exc), cors=False)
-            return
-        except FileNotFoundError as exc:
-            self._preview_error(writer, b"404 Not Found", str(exc), cors=False)
-            return
-        except OSError as exc:
-            self._preview_error(writer, b"404 Not Found", msg("server.py.229", exc=exc), cors=False)
-            return
-
-        size_now = int(stat.st_size)
-        if size_now > self._PREVIEW_MAX_BYTES:
-            self._preview_error(
-                writer,
-                b"413 Payload Too Large",
-                msg("server.py.230", size_now=size_now),
-                cors=False,
-            )
-            return
-        try:
-            data = await asyncio.to_thread(target.read_bytes)
-        except OSError as exc:
-            self._preview_error(
-                writer,
-                b"500 Internal Server Error",
-                msg("server.py.231", exc=exc),
-                cors=False,
-            )
-            return
-        if len(data) > self._PREVIEW_MAX_BYTES:
-            self._preview_error(
-                writer,
-                b"413 Payload Too Large",
-                msg("server.py.325", **{"len(data)": len(data)}),
-                cors=False,
-            )
-            return
-
-        extra = (
-            b"Content-Disposition: inline\r\n" +
-            b"X-Content-Type-Options: nosniff\r\n" +
-            b"Cross-Origin-Resource-Policy: same-origin\r\n" +
-            b"Referrer-Policy: no-referrer\r\n" +
-            b"Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), payment=()\r\n" +
-            b"Service-Worker-Allowed: /\r\n"
-        )
-        if target.suffix.lower() in {".html", ".htm"}:
-            csp = " ".join((
-                "default-src 'self' data: blob: http: https:;",
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http: https:;",
-                "style-src 'self' 'unsafe-inline' data: blob: http: https:;",
-                "img-src 'self' data: blob: http: https:;",
-                "font-src 'self' data: blob: http: https:;",
-                "media-src 'self' data: blob: http: https:;",
-                "connect-src 'self' data: blob: http: https: ws: wss:;",
-                "worker-src 'self' blob:;",
-                "child-src 'self' blob: http: https:;",
-                "frame-src 'self' blob: http: https:;",
-                "object-src 'none';",
-                "form-action 'self' http: https:;",
-                "base-uri 'self';",
-            ))
-            extra += f"Content-Security-Policy: {csp}\r\n".encode("ascii")
-
-        self._write_http(
-            writer,
-            b"200 OK",
-            data,
-            _preview_content_type(target.name).encode(),
-            extra=extra,
-            cors=False,
-        )
 
     async def _serve_preview(self, writer: asyncio.StreamWriter, query: str) -> None:
         """GET /preview → current file bytes, with same-directory rename recovery."""

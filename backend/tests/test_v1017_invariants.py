@@ -20,8 +20,8 @@ import sys
 import types
 from pathlib import Path
 
-BACKEND = Path(__file__).resolve().parents[1]          # .../known_v1.0_React/backend
-PKG = BACKEND / "backend"                               # inner main package
+BACKEND = Path(__file__).resolve().parents[1]          # .../repo/backend package
+PKG = BACKEND                                           # normalized single-layer package
 CORE = BACKEND / "knowe_core"
 HARNESS = BACKEND / "knowe_harness"
 

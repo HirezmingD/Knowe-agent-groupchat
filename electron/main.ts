@@ -12,7 +12,7 @@
 
 import {
   app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, session,
-  type Session,
+  type IpcMainEvent, type IpcMainInvokeEvent, type Session,
 } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, createHmac } from 'node:crypto';
@@ -34,7 +34,6 @@ import { createConnection } from 'node:net'; // [1.2] 端口占用探测
 import { pathToFileURL } from 'node:url';
 
 import {
-  isPreviewControlRequest,
   isPreviewTopLevelUrlUnknown,
   isSafeExternalPreviewUrl,
   parsePreviewNavigationDetails,
@@ -52,7 +51,14 @@ import {
 // [v1.0 frameless] 窗口控制的频道名与动作类型——照家规不手写，preload 也从同一处取。
 import { WINDOW_CONTROL_CHANNEL, type WindowControlAction } from '../src/shared/windowControl';
 // [v1.0.19.1] 托盘新消息悬停卡片——独立 BrowserWindow，见 electron/trayCard.ts。
-import { createTrayCard, destroyTrayCard, isTrayCardOpen, scheduleDestroyTrayCard, cancelDestroyTrayCard } from './trayCard';
+import {
+  createTrayCard,
+  destroyTrayCard,
+  isTrayCardOpen,
+  isTrayCardSender,
+  scheduleDestroyTrayCard,
+  cancelDestroyTrayCard,
+} from './trayCard';
 // [v1.0.25.4] 自动更新模块（electron-updater 封装），见 electron/updater.ts。
 import {
   initAutoUpdater,
@@ -60,15 +66,17 @@ import {
   installUpdate as updaterInstall,
   getUpdateStatus,
 } from './updater';
+import {
+  configureRemoteDebugging,
+  isAuthorizedRuntimeWebSocket,
+  isTrustedTopLevelRuntimeFrame,
+  sanitizeBackendEnvironment,
+  stripRuntimeTokenHeader,
+} from './securityPolicy';
 
-// ═══════════════════════════════════════════════════════════════
-// [调试铁律·和洲拍板] 每次启动必带远程调试（不依赖环境变量，固化进主进程）
-//   地址：http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/<id>
-//   target id 每次重启会变，curl http://127.0.0.1:9222/json 取最新。
-//   两个开关必须成对：只有端口没有 Origin 放行时，浏览器 DevTools 的 ws 会被 403 拒 → 永远 disconnected。
-// ═══════════════════════════════════════════════════════════════
-app.commandLine.appendSwitch('remote-debugging-port', '9222');
-app.commandLine.appendSwitch('remote-allow-origins', '*');
+// Remote debugging can inspect API-key input and the preload runtime token.  It is
+// prohibited in packaged builds; developers must opt in explicitly.
+configureRemoteDebugging(app.commandLine, { isPackaged: app.isPackaged });
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -116,6 +124,25 @@ const BACKEND_DIR = app.isPackaged
   : join(PROJECT_ROOT, 'backend');
 // [阶段1.5] 打包版后端 = PyInstaller 单文件产物（随 resources/backend 一起分发）。
 const BACKEND_EXE = join(BACKEND_DIR, 'KnoweBackend.exe');
+/**
+ * The only native executor permitted to run model-authored commands.  The
+ * packaged path is outside app.asar and is populated by electron-builder;
+ * development uses the exact SDK version pinned in package-lock.json.
+ */
+const MXC_EXECUTABLE = app.isPackaged
+  ? join(process.resourcesPath, 'sandbox', 'wxc-exec.exe')
+  : join(
+    PROJECT_ROOT,
+    'node_modules',
+    '@microsoft',
+    'mxc-sdk',
+    'bin',
+    process.arch === 'arm64' ? 'arm64' : 'x64',
+    'wxc-exec.exe',
+  );
+const SANDBOX_LAUNCHER = app.isPackaged
+  ? join(process.resourcesPath, 'sandbox', 'knowe-sandbox-launcher.exe')
+  : join(PROJECT_ROOT, 'build', 'native', 'knowe-sandbox-launcher.exe');
 const BUNDLED_RUNTIME_ROOT = app.isPackaged
   ? join(process.resourcesPath, 'runtime')
   : join(PROJECT_ROOT, 'runtime');
@@ -306,7 +333,7 @@ const APP_ICON = join(PROJECT_ROOT, 'public', 'brand', 'app-icon.png');
 
 /** 当前后端子进程句柄（没起来时为 null） */
 let backendProc: ChildProcess | null = null;
-/** Per-backend-process credential; never persisted, logged, bridged, or placed in a URL. */
+/** Per-Electron-process bearer; never persisted/logged and shared only with the trusted main frame. */
 let runtimeToken = '';
 /**
  * [v1.0.19.4] 附件路径签名密钥——**持久化**、与临时 WS runtimeToken 分离。
@@ -653,7 +680,7 @@ function beginHealthWatch(): void {
 /** spawn 后端用的环境变量：固定数据根、固定安装根与 UTF-8 stdio。 */
 function buildBackendEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...sanitizeBackendEnvironment(process.env),
     PYTHONUNBUFFERED: '1',
     PYTHONUTF8: '1',
     PYTHONIOENCODING: 'utf-8',
@@ -664,6 +691,12 @@ function buildBackendEnv(): NodeJS.ProcessEnv {
     KNOWE_RUNTIME_TOKEN: runtimeToken,
     KNOWE_ATTACHMENT_KEY: getAttachmentSignKey(),
     KNOWE_AGENT: process.env.KNOWE_AGENT ?? 'deepseek',
+    // backend/sandbox_runner.py accepts no host-shell fallback.  If this exact
+    // binary is missing or its native isolation probe fails, terminal tools
+    // report unavailable instead of executing with the desktop user's token.
+    KNOWE_MXC_EXECUTABLE: MXC_EXECUTABLE,
+    KNOWE_SANDBOX_LAUNCHER: SANDBOX_LAUNCHER,
+    KNOWE_PACKAGED: app.isPackaged ? '1' : '0',
   };
   // [阶段1.5] PYTHONPATH 双保险只对开发态有意义（`python -m backend` 的模块解析兜底）；
   //           打包版是 PyInstaller 自包含产物（依赖在 _internal/），不再注入。
@@ -697,7 +730,10 @@ function buildBackendEnv(): NodeJS.ProcessEnv {
  */
 function spawnBackend(): void {
   intentionalStop = false;
-  runtimeToken = randomBytes(32).toString('hex');
+  // Keep one bearer for the Electron process lifetime. Renderer HTTP/WS clients
+  // cache it, so rotating only the backend child would strand them after an
+  // automatic or user-requested backend restart.
+  if (!runtimeToken) runtimeToken = randomBytes(32).toString('hex');
   logRing.length = 0; // 每次启动清空日志尾巴，别把上一条命的遗言混进来
 
   if (dataRootInitError) {
@@ -769,7 +805,6 @@ function spawnBackend(): void {
   proc.on('error', (err) => {
     clearHealthTimers();
     backendProc = null;
-    runtimeToken = '';
     setStatus('failed', `后端进程错误：${err.message}`);
     // [1.3] 重拉周期内的 spawn 失败也计一次重拉失败。
     //       Node 里 spawn 失败后 exit 可能还会再触发一次，recordRelaunchFailure 内有防重入。
@@ -780,7 +815,6 @@ function spawnBackend(): void {
   proc.on('exit', (code, signal) => {
     clearHealthTimers();
     backendProc = null;
-    runtimeToken = '';
 
     if (intentionalStop) {
       // 我们主动杀的（退出流程 / 手动重启 / 健康检查超时收尸）
@@ -846,7 +880,6 @@ async function killBackend(): Promise<void> {
   const proc = backendProc;
   if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
     backendProc = null;
-    runtimeToken = '';
     return;
   }
 
@@ -854,7 +887,6 @@ async function killBackend(): Promise<void> {
   await requestBackendShutdown();
   if (proc.exitCode !== null || proc.signalCode !== null) {
     backendProc = null;
-    runtimeToken = '';
     return;
   }
   await new Promise<void>((resolve) => {
@@ -873,7 +905,6 @@ async function killBackend(): Promise<void> {
     }, 3000);
   });
   backendProc = null;
-  runtimeToken = '';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -962,20 +993,20 @@ function cancelRelaunch(): void {
 /**
  * 找到真正存在的 preload 产物，返回它的绝对路径。
  *
- * 为什么不能写死 `preload/index.js`：
- *   package.json 里 `"type": "module"`。这种工程里 electron-vite 常把 preload
- *   打成 **index.mjs**（甚至 index.cjs），而不是 index.js。文件名一对不上，
- *   Electron 加载 preload 时找不到文件 → **静默失败** → window.knowe 整个不存在 →
- *   前端 selectDirectory 不是 function → 掉进 <input webkitdirectory> 浏览器兜底。
+ * 为什么优先 `preload/index.cjs`：
+ *   主窗口启用了 Electron sandbox。sandboxed preload 只能使用 Electron 提供的
+ *   受限 CommonJS loader；若跟随 package.json 的 `"type": "module"` 产出 .mjs，
+ *   preload 会在 contextBridge 暴露 window.knowe 前失败。
  *   （这正是「点选择目录弹出浏览器上传框」的根因。）
  *
- * 所以这里按 mjs → js → cjs 的顺序探测，命中谁用谁，dev / prod 都稳。
+ * 因此只接受构建门禁生成的 index.cjs。缺失时让 Electron 的 preload-error
+ * 明确暴露问题，绝不悄悄选取已知与 sandbox 不兼容的旧 ESM 产物。
  * 一个都找不到就大声报错（多半是还没 build），并回退到 index.js 让
  * 'preload-error' 把真实错误打出来。
  */
 function resolvePreloadPath(): string {
   const dir = join(__dirname, '..', 'preload');
-  const candidates = ['index.mjs', 'index.js', 'index.cjs'];
+  const candidates = ['index.cjs'];
   for (const name of candidates) {
     const p = join(dir, name);
     if (existsSync(p)) {
@@ -983,7 +1014,7 @@ function resolvePreloadPath(): string {
       return p;
     }
   }
-  const fallback = join(dir, 'index.js');
+  const fallback = join(dir, 'index.cjs');
   console.error(
     `[main] ⚠ 在 ${dir} 下没找到任何 preload 产物（试过 ${candidates.join(' / ')}）。\n` +
     `        先跑一次 electron-vite build/dev 生成 out/preload；` +
@@ -1191,6 +1222,16 @@ function previewEntryUrl(): string {
   return pathToFileURL(join(__dirname, '..', 'renderer', 'preview.html')).href;
 }
 
+function mainEntryUrl(): string {
+  const devUrl = process.env.ELECTRON_RENDERER_URL;
+  if (devUrl) return devUrl;
+  return pathToFileURL(join(__dirname, '..', 'renderer', 'index.html')).href;
+}
+
+function isMainTopLevelUrl(raw: unknown): boolean {
+  return isPreviewTopLevelUrlUnknown(raw, mainEntryUrl());
+}
+
 function isPreviewTopLevelUrl(raw: unknown): boolean {
   return isPreviewTopLevelUrlUnknown(raw, previewEntryUrl());
 }
@@ -1206,20 +1247,39 @@ function loadPreviewRenderer(win: BrowserWindow): void {
 
 let runtimePolicyRegistered = false;
 
-/**
- * [v1.0.26.2] 可信页面判断：按 webContentsId 找应用自家窗口，再查该窗口主 frame 当前 URL。
- *
- * 为什么不用 details.initiator：Chromium 对 file:// 页面（打包版）发起的跨源请求不填充
- * initiator 字段（file:// 是 opaque origin，实测为 undefined），referrer 兜底也常缺失，
- * 导致打包版所有 /preview 文件读取请求拿不到 token → 后端 401「图片加载失败」。
- * 主 frame 当前 URL 是主进程权威信息，打包版可靠；且安全边界不变——预览窗口加载的
- * 隔离项目 HTML（http://127.0.0.1:PORT/preview/…）仍被识别为不可信。
- */
-function trustedAppFrame(webContentsId: number | undefined): boolean {
-  if (typeof webContentsId !== 'number') return false;
-  const win = appWindowForWebContents(webContentsId);
+/** A runtime request is trusted only when Electron identifies the exact top frame. */
+function trustedRuntimeRequest(
+  details: Pick<Electron.OnBeforeSendHeadersListenerDetails, 'webContentsId' | 'frame'>,
+): boolean {
+  const win = appWindowForWebContents(details.webContentsId);
   if (!win) return false;
-  return isAppOwnPageUrl(win.webContents.getURL());
+  return isTrustedTopLevelRuntimeFrame(
+    details.frame,
+    win.webContents.mainFrame,
+    win === mainWindow
+      ? isMainTopLevelUrl(win.webContents.getURL())
+      : isPreviewTopLevelUrl(win.webContents.getURL()),
+  );
+}
+
+/** WebSocket auth remains fail-closed without depending on optional frame metadata. */
+function trustedRuntimeWebSocket(
+  details: Pick<Electron.OnBeforeRequestListenerDetails,
+    'url' | 'method' | 'resourceType' | 'webContentsId' | 'frame'>,
+): boolean {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  return isAuthorizedRuntimeWebSocket({
+    requestUrl: details.url,
+    expectedWsUrl: RUNTIME_ENDPOINTS.wsUrl,
+    resourceType: details.resourceType,
+    method: details.method,
+    requestWebContentsId: details.webContentsId,
+    mainWebContentsId: mainWindow.webContents.id,
+    requestFrame: details.frame,
+    mainFrame: mainWindow.webContents.mainFrame,
+    appOwnPage: isMainTopLevelUrl(mainWindow.webContents.getURL()),
+    runtimeToken,
+  });
 }
 
 /** 按 webContentsId 找应用自家窗口（主窗口/预览窗口）；找不到返回 null。 */
@@ -1231,22 +1291,6 @@ function appWindowForWebContents(webContentsId: number | undefined): BrowserWind
   return null;
 }
 
-/** 应用自家页面：file://（打包版）或 dev server 地址（dev 模式）。 */
-function isAppOwnPageUrl(raw: string): boolean {
-  if (raw.startsWith('file:')) return true;
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  return !!devUrl && raw.startsWith(devUrl);
-}
-
-/** 请求发起方 URL 兜底：initiator/referrer 缺失时用发起窗口主 frame 当前 URL。 */
-function requestSourceUrl(details: Electron.OnBeforeRequestListenerDetails): string {
-  const raw = (details as { initiator?: unknown; referrer?: unknown }).initiator
-    ?? (details as { referrer?: unknown }).referrer;
-  if (typeof raw === 'string' && raw.length > 0) return raw;
-  const win = appWindowForWebContents(details.webContentsId);
-  return win ? win.webContents.getURL() : '';
-}
-
 /** One listener per event: inject the secret only for trusted outer Knowe renderers. */
 function registerRuntimeRequestPolicy(targetSession: Session): void {
   if (runtimePolicyRegistered) return;
@@ -1254,13 +1298,16 @@ function registerRuntimeRequestPolicy(targetSession: Session): void {
   const httpFilter = `${RUNTIME_ENDPOINTS.httpBase}/*`;
   // WebSocket 升级请求在 Chromium 中是 HTTP 请求，ws:// filter 可能不匹配。
   // 用 http:// 匹配 WS 端口，确保 token 能注入到升级请求头。
-  const wsPortFilter = `http://127.0.0.1:${WS_PORT}/*`;
+  const wsFilter = `${RUNTIME_ENDPOINTS.wsUrl.replace(/\/$/, '')}/*`;
 
   targetSession.webRequest.onBeforeSendHeaders(
-    { urls: [httpFilter, wsPortFilter] },
+    { urls: [httpFilter, wsFilter] },
     (details, callback) => {
-      // [v1.0.26.2] 可信判断改为主 frame URL（initiator 在打包版 file:// 下恒缺失，见 trustedAppFrame 注释）
-      if (runtimeToken && trustedAppFrame(details.webContentsId)) {
+      if (details.resourceType === 'webSocket') {
+        callback({ requestHeaders: stripRuntimeTokenHeader(details.requestHeaders) });
+        return;
+      }
+      if (runtimeToken && trustedRuntimeRequest(details)) {
         callback({
           requestHeaders: {
             ...details.requestHeaders,
@@ -1276,11 +1323,15 @@ function registerRuntimeRequestPolicy(targetSession: Session): void {
   // Isolated project HTML shares the outer preview webContents, so the frame source is the decisive
   // boundary.  Block every control request even when a no-CORS tag or form would hide failure.
   targetSession.webRequest.onBeforeRequest(
-    { urls: [httpFilter] },
+    { urls: [httpFilter, wsFilter] },
     (details, callback) => {
-      // [v1.0.26.2] initiator/referrer 缺失时（file:// 打包版）用发起窗口主 frame URL 兜底，
-      //   否则 isPreviewControlRequest 会 fail-open（不拦截），隔离 HTML 可摸到控制端点。
-      callback({ cancel: isPreviewControlRequest(details.url, requestSourceUrl(details)) });
+      // Runtime endpoints are capabilities, not ordinary local web pages. Any
+      // unknown, destroyed, or child-frame request is denied. In particular,
+      // srcdoc frames have opaque/missing initiators but share webContentsId.
+      const trusted = details.resourceType === 'webSocket'
+        ? trustedRuntimeWebSocket(details)
+        : trustedRuntimeRequest(details);
+      callback({ cancel: !trusted });
     },
   );
 }
@@ -1299,7 +1350,7 @@ function createPreviewWindow(): BrowserWindow {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       preload: resolvePreloadPath(),
       additionalArguments: [
         `--knowe-http-base=${RUNTIME_ENDPOINTS.httpBase}`,
@@ -1328,30 +1379,27 @@ function createPreviewWindow(): BrowserWindow {
   win.webContents.on('will-navigate', (event, url) => {
     if (!isPreviewTopLevelUrl(url)) event.preventDefault();
   });
-  win.webContents.on('will-frame-navigate', (event, details: unknown) => {
+  win.webContents.on('will-frame-navigate', (details) => {
     try {
       const decision = parsePreviewNavigationDetails(details);
       if (!decision) {
-        event.preventDefault();
+        details.preventDefault();
         return;
       }
       if (decision.mainFrame) {
-        if (!isPreviewTopLevelUrl(decision.url)) event.preventDefault();
+        if (!isPreviewTopLevelUrl(decision.url)) details.preventDefault();
         return;
       }
       const action = previewFrameNavigationAction(decision.url, decision.currentFrameUrl);
       if (action === 'allow') return;
-      event.preventDefault();
-      if (action === 'open-external' && typeof decision.url === 'string') {
-        void shell.openExternal(decision.url).catch((error: unknown) => {
-          const detail = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
-          console.error(`[main] 无法用系统浏览器打开预览外链：${detail}`);
-        });
-      }
+      details.preventDefault();
+      // Frame navigation is never promoted into a host-browser launch.  Trusted
+      // Markdown links use target=_blank and the window-open handler above;
+      // project HTML cannot turn a scripted location change into host activity.
     } catch (error: unknown) {
       // External Electron payloads are untrusted at runtime.  Any parser/policy failure
       // fails closed and only emits a bounded diagnostic; it must never crash main.
-      event.preventDefault();
+      details.preventDefault();
       const detail = error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300);
       console.error(`[main] preview frame navigation rejected after boundary error: ${detail}`);
     }
@@ -1406,30 +1454,74 @@ async function openPreviewWindow(payload: PreviewOpenPayload): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 function registerIpc(): void {
+  type FrameIpcEvent = Pick<IpcMainEvent | IpcMainInvokeEvent, 'sender' | 'senderFrame'>;
+  const isTopFrame = (evt: FrameIpcEvent): boolean => {
+    try {
+      return evt.senderFrame !== null && evt.senderFrame === evt.sender.mainFrame;
+    } catch {
+      return false;
+    }
+  };
+  const isMainSender = (evt: FrameIpcEvent): boolean => (
+    isTopFrame(evt)
+    && !!mainWindow
+    && !mainWindow.isDestroyed()
+    && evt.sender === mainWindow.webContents
+  );
+  const isPreviewSender = (evt: FrameIpcEvent): boolean => (
+    isTopFrame(evt)
+    && !!previewWindow
+    && !previewWindow.isDestroyed()
+    && evt.sender === previewWindow.webContents
+  );
+  const isAppSender = (evt: FrameIpcEvent): boolean => isMainSender(evt) || isPreviewSender(evt);
+  const requireMainSender = (evt: FrameIpcEvent): void => {
+    if (!isMainSender(evt)) throw new Error('IPC sender rejected');
+  };
+  const requireAppSender = (evt: FrameIpcEvent): void => {
+    if (!isAppSender(evt)) throw new Error('IPC sender rejected');
+  };
+
   // ① 问一次当前状态
-  ipcMain.handle(IPC.getStatus, () => snapshot());
+  ipcMain.handle(IPC.getStatus, (evt) => {
+    requireAppSender(evt);
+    return snapshot();
+  });
 
   // ①-b 获取本次 Runtime 认证令牌（供渲染进程注入 WebSocket URL）
-  ipcMain.handle(IPC.getToken, () => runtimeToken);
+  ipcMain.handle(IPC.getToken, (evt) => {
+    requireMainSender(evt);
+    return runtimeToken;
+  });
 
   // ═══ [v1.0.25.4] 自动更新（PRD：静默检查 + 手动安装）═══
   // 产品版本号（package.json productVersion；UI 显示用，不再写死）
-  ipcMain.handle(IPC.getProductVersion, () => getProductVersion());
+  ipcMain.handle(IPC.getProductVersion, (evt) => {
+    requireAppSender(evt);
+    return getProductVersion();
+  });
   // 查询当前更新状态（idle/checking/downloading/ready/error）
-  ipcMain.handle(IPC.updateStatus, () => getUpdateStatus());
+  ipcMain.handle(IPC.updateStatus, (evt) => {
+    requireMainSender(evt);
+    return getUpdateStatus();
+  });
   // 手动检查更新（设置页「检查更新」按钮；结果经 updateStatusChanged 推送）
-  ipcMain.handle(IPC.updateCheck, async () => {
+  ipcMain.handle(IPC.updateCheck, async (evt) => {
+    requireMainSender(evt);
     await updaterCheck(false);
   });
   // 触发「重启安装更新」：先优雅退出后端（避免安装器强杀残留）→ quitAndInstall
-  ipcMain.handle(IPC.updateInstall, async () => {
+  ipcMain.handle(IPC.updateInstall, async (evt) => {
+    requireMainSender(evt);
     await updaterInstall({ onInstall: killBackend });
   });
 
-  // ② 重启后端：杀旧的 → 重新探测端口（[1.2] 避让）→ 起新的 → 返回起完的即时状态（多半是 starting）
-  ipcMain.handle(IPC.restart, async () => {
+  // ② 重启后端：杀旧的 → 复用本 Electron 生命周期固定端口 → 起新的。
+  // webRequest filters 与 renderer additionalArguments 在窗口创建时固化；
+  // killBackend 已释放旧后端监听，重新避让会让 UI 和策略仍指向旧端口。
+  ipcMain.handle(IPC.restart, async (evt) => {
+    requireMainSender(evt);
     await killBackend();
-    await ensurePorts(); // [1.2] 重启时端口可能又被占，复用避让逻辑
     spawnBackend();
     return snapshot();
   });
@@ -1486,7 +1578,8 @@ function registerIpc(): void {
   };
 
   // ③-a [v1.0.19.4] 文件选择器（多选任意格式）→ 带签名的附件列表；取消 → []
-  ipcMain.handle(IPC.selectFiles, async () => {
+  ipcMain.handle(IPC.selectFiles, async (evt) => {
+    requireMainSender(evt);
     const win = mainWindow ?? undefined;
     const options: Electron.OpenDialogOptions = {
       title: '选择要发送的文件',
@@ -1503,7 +1596,8 @@ function registerIpc(): void {
   });
 
   // ③-b [v1.0.19.4] 给拖拽进来的本地路径补签名（drop 的 file.path 只有渲染进程拿得到）。
-  ipcMain.handle(IPC.signDroppedFiles, async (_evt, paths: unknown) => {
+  ipcMain.handle(IPC.signDroppedFiles, async (evt, paths: unknown) => {
+    requireMainSender(evt);
     if (!Array.isArray(paths)) return [];
     return paths
       .map((p) => (typeof p === 'string' ? toAttachmentPick(p) : null))
@@ -1511,11 +1605,18 @@ function registerIpc(): void {
   });
 
   // ③-c [v1.0.19.4] 回看：用系统默认程序打开 / 在文件管理器定位一个本地附件。
-  ipcMain.handle(IPC.openLocalFile, async (_evt, path: unknown, sig: unknown) => localFileAction(path, sig, 'open'));
-  ipcMain.handle(IPC.revealLocalFile, async (_evt, path: unknown, sig: unknown) => localFileAction(path, sig, 'reveal'));
+  ipcMain.handle(IPC.openLocalFile, async (evt, path: unknown, sig: unknown) => {
+    requireMainSender(evt);
+    return localFileAction(path, sig, 'open');
+  });
+  ipcMain.handle(IPC.revealLocalFile, async (evt, path: unknown, sig: unknown) => {
+    requireMainSender(evt);
+    return localFileAction(path, sig, 'reveal');
+  });
 
   // ③ 目录选择器：返回绝对路径；取消 → null
-  ipcMain.handle(IPC.selectDirectory, async () => {
+  ipcMain.handle(IPC.selectDirectory, async (evt) => {
+    requireMainSender(evt);
     const win = mainWindow ?? undefined;
     const res = win
       ? await dialog.showOpenDialog(win, {
@@ -1533,7 +1634,8 @@ function registerIpc(): void {
   });
 
   // ④ 用系统文件管理器打开目录（shell.openPath 语义；接口签名是 Promise<void>）
-  ipcMain.handle(IPC.openPath, async (_evt, dir: string) => {
+  ipcMain.handle(IPC.openPath, async (evt, dir: string) => {
+    requireMainSender(evt);
     if (typeof dir === 'string' && dir.trim()) {
       await shell.openPath(dir);
     }
@@ -1542,7 +1644,8 @@ function registerIpc(): void {
   // ⑤ 未读数：单向通知（on，不 handle）。更新角标 + 有未读就闪任务栏 & 托盘图标。
   // [v1.0.20.2] 去掉「窗口不在前台才闪」的条件——用户明确：只要还有未读，图标就一直闪；
   // 点开一个会话只消化它自己的未读，剩下没点开的继续闪，直到全部点开或点「忽略全部」。
-  ipcMain.on(IPC.setUnread, (_evt, total: number) => {
+  ipcMain.on(IPC.setUnread, (evt, total: number) => {
+    if (!isMainSender(evt)) return;
     const n = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0;
 
     // Dock/任务栏数字角标（macOS / 部分 Linux 支持；Windows 上是 no-op，调了也不报错）
@@ -1560,7 +1663,8 @@ function registerIpc(): void {
   });
 
   // ⑤-b [v1.0.19.1] 未读明细：单向通知（on，不 handle）。只是存起来，mouse-enter 时才用。
-  ipcMain.on(IPC.setUnreadDetails, (_evt, details: UnreadDetail[]) => {
+  ipcMain.on(IPC.setUnreadDetails, (evt, details: UnreadDetail[]) => {
+    if (!isMainSender(evt)) return;
     if (!Array.isArray(details)) return;
     unreadDetailsCache = details;
     // 卡片正开着的时候明细又变了（比如又来了一条）→ 就地刷新，别等下一次 mouse-enter。
@@ -1575,7 +1679,8 @@ function registerIpc(): void {
   });
 
   // ⑤-c [v1.0.19.1] 托盘卡片点了某一行：关卡片 → 主窗口拉到前台 → 让它切到对应项目。
-  ipcMain.on(IPC.trayCardClick, (_evt, projectId: string) => {
+  ipcMain.on(IPC.trayCardClick, (evt, projectId: string) => {
+    if (!isTopFrame(evt) || !isTrayCardSender(evt.sender)) return;
     destroyTrayCard();
     if (typeof projectId !== 'string' || !projectId) return;
     showMainWindow(); // 窗口可能缩在托盘/最小化里，先拉出来
@@ -1585,13 +1690,15 @@ function registerIpc(): void {
   });
 
   // ⑤-d [v1.0.19.1] 鼠标进入了卡片 → 取消关闭定时器，卡片留在屏幕上。
-  ipcMain.on(IPC.trayCardMouseEnter, () => {
+  ipcMain.on(IPC.trayCardMouseEnter, (evt) => {
+    if (!isTopFrame(evt) || !isTrayCardSender(evt.sender)) return;
     writeLog('[trayCard] IPC cardMouseEnter → cancel');
     cancelDestroyTrayCard();
   });
 
   // ⑤-e [v1.0.19.1] 鼠标离开了卡片 → 开始倒计时关闭。
-  ipcMain.on(IPC.trayCardMouseLeave, () => {
+  ipcMain.on(IPC.trayCardMouseLeave, (evt) => {
+    if (!isTopFrame(evt) || !isTrayCardSender(evt.sender)) return;
     writeLog('[trayCard] IPC cardMouseLeave → schedule');
     scheduleDestroyTrayCard();
   });
@@ -1602,7 +1709,8 @@ function registerIpc(): void {
   //     只是图标不再跳动（忽略 ≠ 已读）
   //   · 之后前端任何一次 setUnread 推送（新消息来了、用户点开了会话）都会
   //     按新状态重新决定闪不闪——新消息来就重新闪，全部读完就自然停。
-  ipcMain.on(IPC.trayCardIgnoreAll, () => {
+  ipcMain.on(IPC.trayCardIgnoreAll, (evt) => {
+    if (!isTopFrame(evt) || !isTrayCardSender(evt.sender)) return;
     writeLog('[trayCard] IPC trayCardIgnoreAll → 停闪（未读保留）');
     destroyTrayCard();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
@@ -1610,7 +1718,8 @@ function registerIpc(): void {
   });
 
   // ⑥ [v1.0 fix-p3 #3] 桌面通知/关闭行为偏好：单向通知（on，不 handle）。
-  ipcMain.on(IPC.setNotifyPrefs, (_evt, prefs: { desktop?: boolean; closeToTray?: boolean }) => {
+  ipcMain.on(IPC.setNotifyPrefs, (evt, prefs: { desktop?: boolean; closeToTray?: boolean }) => {
+    if (!isMainSender(evt)) return;
     if (prefs && typeof prefs === 'object') {
       notifyPrefs = {
         desktop: prefs.desktop !== false,       // 缺省当开
@@ -1627,6 +1736,7 @@ function registerIpc(): void {
   //    「关闭」走 win.close() 而**不是** destroy()：让上面 createWindow 里的 close 事件
   //    照常拦截，closeToTray「收进托盘」对自绘红点同样生效——和点原生 ✕ 一个待遇。
   ipcMain.on(WINDOW_CONTROL_CHANNEL, (evt, action: WindowControlAction) => {
+    if (!isAppSender(evt)) return;
     // 从发件的 webContents 反查窗口，比全局 mainWindow 稳（将来多窗口也不串线）。
     const win = BrowserWindow.fromWebContents(evt.sender) ?? mainWindow;
     if (!win || win.isDestroyed()) return;
@@ -1649,7 +1759,7 @@ function registerIpc(): void {
 
   // ⑧ 主窗口请求打开独立预览；sender 必须正是主窗口。
   ipcMain.handle(IPC.openPreview, async (evt, raw: unknown) => {
-    if (!mainWindow || mainWindow.isDestroyed() || evt.sender !== mainWindow.webContents) {
+    if (!isMainSender(evt)) {
       throw new Error('preview open sender rejected');
     }
     await openPreviewWindow(normalizePreviewOpenPayload(raw));
@@ -1657,7 +1767,7 @@ function registerIpc(): void {
 
   // ⑨ 预览 renderer 建好 listener 后再冲刷队列，避免首个打开请求丢失。
   ipcMain.on(IPC.previewReady, (evt) => {
-    if (!previewWindow || previewWindow.isDestroyed() || evt.sender !== previewWindow.webContents) return;
+    if (!isPreviewSender(evt)) return;
     previewRendererReady = true;
     flushPendingPreviewOpens();
   });
@@ -1690,8 +1800,10 @@ function createWindow(): void {
       // 安全三件套：隔离开、Node 关、preload 只从编译产物取。
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false, // preload 里要用 Node 内建（ipcRenderer 桥接），故关 sandbox
-      // [v1.0 fix-p3 #2] 不再写死 index.js —— 按实际产物扩展名解析（type:module 下常是 .mjs）。
+      // Sandboxed preload still has Electron's contextBridge/ipcRenderer subset;
+      // it does not need unrestricted Node.js or host filesystem access.
+      sandbox: true,
+      // Sandboxed preload 必须使用构建生成的 CommonJS 产物。
       preload: resolvePreloadPath(),
       additionalArguments: [
         `--knowe-http-base=${RUNTIME_ENDPOINTS.httpBase}`,
@@ -1710,7 +1822,6 @@ function createWindow(): void {
   mainWindow.webContents.on('preload-error', (_evt, preloadPath, error) => {
     console.error(`[main] ✘ preload 加载失败：${preloadPath}\n${error?.stack ?? String(error)}`);
   });
-
   // [v1.0.26.2] 主窗口外链拦截（此前漏装，设置-关于官网/GitHub 链接在内置窗口打开）：
   //   安全外链（http/https 非本机回环）→ 系统默认浏览器；其余一律 deny——主窗口没有合法
   //   新窗口需求（预览窗口由主进程 IPC 直建，不走 window.open）。
@@ -1718,10 +1829,10 @@ function createWindow(): void {
     if (isSafeExternalPreviewUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
-  // [v1.0.26.2] 兜底：主窗口自身导航只允许应用页面（file:// 自家 / dev 地址），
+  // 主窗口自身导航只允许精确的应用入口（不信任任意 file:// 页面），
   //   其他一律拦截；安全外链转系统浏览器（防 target=_self、JS 重定向绕过 window-open）。
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (isAppOwnPageUrl(url)) return;
+    if (isMainTopLevelUrl(url)) return;
     event.preventDefault();
     if (isSafeExternalPreviewUrl(url)) void shell.openExternal(url);
   });

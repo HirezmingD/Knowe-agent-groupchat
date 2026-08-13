@@ -105,7 +105,7 @@ def _install_root_default() -> str:
       2. PyInstaller 冻结态（sys._MEIPASS 存在）：取 _MEIPASS 的父目录——
          直接跑 KnoweBackend.exe 时 _MEIPASS = <安装根>/_internal，
          父目录即安装根；
-      3. 开发态：从包位置往上推两级 = 项目根（原语义，保持不变）。
+      3. 开发态：源码仓库根（backend/ 的父目录）。
     """
     env_root = os.environ.get("KNOWE_INSTALL_ROOT")
     if env_root:
@@ -117,7 +117,7 @@ def _install_root_default() -> str:
         meipass = None
     if meipass:
         return str(Path(meipass).resolve().parent)
-    return str(Path(__file__).resolve().parents[2])
+    return str(Path(__file__).resolve().parents[1])
 
 
 def _data_dir() -> str:
@@ -391,7 +391,7 @@ class Config:
     version: str = field(default_factory=lambda: os.environ.get("KNOWE_VERSION", "1.0.25.2"))
     # 安装目录（平台变更日志扫描的根）。Electron 流程靠 KNOWE_INSTALL_ROOT 注入；
     #   PyInstaller 冻结态兜底取 _MEIPASS 父目录（直接跑 exe 也拿得到安装根）；
-    #   开发态从包位置往上推两级 = 项目根。见 _install_root_default()。
+    #   开发态取 backend/ 的父目录 = 源码仓库根。见 _install_root_default()。
     install_root: str = field(default_factory=_install_root_default)
 
     # ── 纪律 ──

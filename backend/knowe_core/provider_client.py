@@ -29,6 +29,7 @@ from typing import Any, AsyncGenerator, Callable
 import httpx
 
 from knowe_core.provider_identity import http_status_error_message, provider_target
+from knowe_core.redaction import redact_sensitive_text
 from knowe_core.errors import (
     ProviderAuthError,
     ProviderBadResponseError,
@@ -597,7 +598,11 @@ class ProviderClient:
 
         body = ""
         try:
-            body = (await response.aread()).decode("utf-8", "replace")[:500]
+            body = redact_sensitive_text(
+                (await response.aread()).decode("utf-8", "replace"),
+                secrets=(self.api_key,),
+                limit=500,
+            )
         except Exception:
             pass
 
@@ -608,6 +613,7 @@ class ProviderClient:
             base_url=self.base_url,
             model=self.model,
             response_body=body,
+            secrets=(self.api_key,),
         )
         if code == 401:
             raise ProviderAuthError(message, 401, body, retryable=False)

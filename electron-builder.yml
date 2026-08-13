@@ -20,7 +20,7 @@ copyright: Copyright © 2026 Knowe
 #   （v1.0.26.2 构建实锤）→ version 必须三段；曾用「内部 1.0.27 / 显示 1.0.26.2.0」双轨，
 #   但双轨导致服务器旧索引 URL 版本替换失效且维护混乱，v1.0.28 起统一。
 #   buildVersion（Windows FileVersion/ProductVersion）按 Windows 惯例四段 1.0.29.0，仅此一处。
-buildVersion: 1.0.33.0
+buildVersion: 1.0.34.0
 
 # 使用本地已装的 electron 发行版（node_modules/electron/dist），跳过「下载 zip → 解压 → rename」：
 # 腾讯电脑管家实时防护会锁住新解压的 electron.exe，导致 rename EPERM（实测），
@@ -31,7 +31,25 @@ directories:
   output: release
   buildResources: build
 
-# asar 内只放最小运行集；main 进程无第三方运行时依赖（externalizeDepsPlugin）
+# Security boundary enforced in the packaged Electron executable, before any
+# application JavaScript runs. This prevents command-line/env inspector bypasses
+# and restricts app loading to the integrity-checked ASAR archive.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  # Electron's stock Windows distribution does not ship
+  # browser_v8_context_snapshot.bin. Enabling this fuse makes the packaged app
+  # abort before JavaScript starts, so keep the standard snapshot path.
+  loadBrowserProcessSpecificV8Snapshot: false
+  # Main and preview renderer entries still use BrowserWindow.loadFile(). Keep
+  # file-module/subresource loading functional until both move to a custom protocol.
+  grantFileProtocolExtraPrivileges: true
+
+# asar 内只放最小运行集；electron-builder 负责收集 main 进程的生产依赖。
 files:
   - out/**
   - package.json
@@ -43,6 +61,16 @@ extraResources:
     to: backend
     filter:
       - "**/*"
+  # Microsoft Windows Container 执行器来自锁定的 @microsoft/mxc-sdk@0.7.0。
+  # 仅交付 x64 所需二进制和许可证，不把整个 40MB SDK 带进安装包。
+  - from: node_modules/@microsoft/mxc-sdk/bin/x64/wxc-exec.exe
+    to: sandbox/wxc-exec.exe
+  - from: node_modules/@microsoft/mxc-sdk/LICENSE.md
+    to: sandbox/LICENSE.md
+  # Outer Windows Job Object supervisor. It enforces kill-on-close and hard
+  # process/memory/CPU limits around the MXC AppContainer process tree.
+  - from: build/native/knowe-sandbox-launcher.exe
+    to: sandbox/knowe-sandbox-launcher.exe
 
 win:
   icon: build/icon.ico
@@ -64,7 +92,7 @@ nsis:
   # 图标：安装器/卸载器/快捷方式共用多帧 icon.ico（和洲拍板：四类共用）
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
-  # 自定义 NSIS 脚本：卸载页「保留聊天记录与项目数据」默认勾选 + 卸载跳过 data/Logs
+  # 自定义 NSIS 脚本：卸载应用文件，但始终保留 data/Logs 用户数据目录。
   include: build/installer.nsh
   # electron-builder 的 appData 清理开关（默认 false）——我们的数据在安装目录 data/，
   # 由 installer.nsh 的 customRemoveFiles 控制，这里保持默认

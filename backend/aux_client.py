@@ -25,6 +25,7 @@ import urllib.request
 from typing import Any
 
 from .agent_runtime import ToolError
+from knowe_core.redaction import redact_sensitive_text
 
 log = logging.getLogger("knowe.aux")
 
@@ -74,22 +75,29 @@ async def chat(
     try:
         import httpx
     except ImportError:
-        return _parse(await _urllib_post(url, payload, headers, timeout_s), what, model)
+        return _parse(
+            await _urllib_post(url, payload, headers, timeout_s, api_key),
+            what,
+            model,
+            api_key,
+        )
 
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as cli:
             r = await cli.post(url, headers=headers, json=payload)
             if r.status_code >= 400:
-                raise ToolError(_http_hint(r.status_code, r.text, what, model))
-            return _parse(r.json(), what, model)
+                raise ToolError(_http_hint(r.status_code, r.text, what, model, api_key))
+            return _parse(r.json(), what, model, api_key)
     except ToolError:
         raise
     except Exception as exc:                       # httpx.TimeoutException / ConnectError / …
-        raise ToolError(f"{what}调用失败：{type(exc).__name__}: {exc}") from None
+        raise ToolError(redact_sensitive_text(
+            f"{what}调用失败：{type(exc).__name__}: {exc}", secrets=(api_key,),
+        )) from None
 
 
 async def _urllib_post(url: str, payload: dict[str, Any], headers: dict[str, str],
-                       timeout_s: float) -> dict[str, Any]:
+                       timeout_s: float, api_key: str) -> dict[str, Any]:
     """没装 httpx 也能用 —— 阻塞调用丢进线程，绝不占着事件循环。"""
     import asyncio
 
@@ -102,22 +110,28 @@ async def _urllib_post(url: str, payload: dict[str, Any], headers: dict[str, str
                 return json.loads(resp.read().decode("utf-8", errors="replace"))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")[:600]
-            raise ToolError(_http_hint(exc.code, body, "辅助模型", str(payload.get("model")))) from None
+            raise ToolError(_http_hint(
+                exc.code, body, "辅助模型", str(payload.get("model")), api_key,
+            )) from None
         except Exception as exc:
-            raise ToolError(f"辅助模型调用失败：{type(exc).__name__}: {exc}") from None
+            raise ToolError(redact_sensitive_text(
+                f"辅助模型调用失败：{type(exc).__name__}: {exc}", secrets=(api_key,),
+            )) from None
 
     return await asyncio.to_thread(_post)
 
 
-def _parse(data: dict[str, Any], what: str, model: str) -> str:
+def _parse(data: dict[str, Any], what: str, model: str, api_key: str = "") -> str:
     try:
         text = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
-        raise ToolError(f"{what}返回了看不懂的结构：{str(data)[:200]}") from None
+        raise ToolError(redact_sensitive_text(
+            f"{what}返回了看不懂的结构：{str(data)}", secrets=(api_key,), limit=240,
+        )) from None
     return (text or "").strip()
 
 
-def _http_hint(status: int, body: str, what: str, model: str) -> str:
+def _http_hint(status: int, body: str, what: str, model: str, api_key: str = "") -> str:
     """
     把 HTTP 错误翻译成「用户/模型能照着做点什么」的话。
 
@@ -126,7 +140,9 @@ def _http_hint(status: int, body: str, what: str, model: str) -> str:
       如果只回一句「HTTP 400: invalid request」，用户会以为是 Knowe 坏了。
       得直接告诉他：不是坏了，是这个模型看不了图，要看图请配一个能看图的。
     """
-    snippet = (body or "").strip().replace("\n", " ")[:400]
+    snippet = redact_sensitive_text(
+        (body or "").strip().replace("\n", " "), secrets=(api_key,), limit=400,
+    )
     low = snippet.lower()
     if status in (401, 403):
         return f"{what} API key 无效或没有权限（HTTP {status}）：{snippet}"

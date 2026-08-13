@@ -15,7 +15,7 @@ Thanks for your interest in contributing to Knowe! This is a small project.
 See [TECH.md](./TECH.md) for architecture and local development:
 
 ```bash
-npm install
+npm ci
 pip install -r backend/requirements.txt
 npm run electron:dev
 ```

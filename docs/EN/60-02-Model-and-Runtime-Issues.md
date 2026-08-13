@@ -48,7 +48,7 @@ Connection (badge / backend) problems themselves aren't on this page — go back
 
 1. After fixing it per the table above, click "Test and Apply" again (or the re-test button on the setup card);
 2. The first-run setup has a three-step quick self-check covering most cases: ① whether the API Key is complete with no leading or trailing spaces; ② whether this machine can reach the vendor's website / API domain; ③ whether a corporate proxy is blocking it (see [02 Installation and System Requirements · Network requirements](02-Installation-and-System-Requirements.md#network-requirements));
-3. And don't forget: the API Key is kept on this machine only, never written to browser storage, and can be cleared and re-entered in Settings (see [API Key security: not written to disk](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)).
+3. And don't forget: the API Key is encrypted locally with Windows DPAPI, never written to browser storage, and can be cleared and re-entered in Settings (see [API Key security: encrypted local storage](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)).
 
 ## Symptom 2: a member reports "the model doesn't support this format"
 
@@ -100,7 +100,7 @@ See which category the error falls into: "the model doesn't support this format"
 
 **Q: I changed the Key but still get authentication failure?**
 
-Check that the Key is complete with no leading or trailing spaces, and confirm you copied the Key of the selected provider; if needed, clear it in Settings and re-enter it before testing again (see [Symptom 1](#symptom-1-the-connection-test-fails) and [API Key security: not written to disk](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)).
+Check that the Key is complete with no leading or trailing spaces, and confirm you copied the Key of the selected provider; if needed, clear it in Settings and re-enter it before testing again (see [Symptom 1](#symptom-1-the-connection-test-fails) and [API Key security: encrypted local storage](30-01-Models-and-Providers.md#api-key-security-not-written-to-disk)).
 
 **Q: Can the fallback model be unavailable too?**
 

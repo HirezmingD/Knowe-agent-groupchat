@@ -11,6 +11,7 @@ node_modules/
 dist/
 out/
 release/
+native/**/target/
 *.tsbuildinfo
 
 # Python
@@ -38,6 +39,7 @@ Logs/
 
 # 测试
 .pytest_cache/
+.tmp-tests/
 coverage/
 htmlcov/
 
@@ -49,5 +51,7 @@ Thumbs.db
 *.zip
 *.tar.gz
 *.7z
-build/
+# build/icon.ico 等生成物不入库；安装器钩子是可复现构建所需源码，必须保留。
+build/*
+!build/installer.nsh
 assets/videos/compressed/

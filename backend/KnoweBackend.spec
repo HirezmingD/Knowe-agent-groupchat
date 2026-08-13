@@ -29,7 +29,7 @@ try:  # version 资源仅 Windows 构建机可用；拿不到就略过，不阻�
     )
 
     _VERSION = VSVersionInfo(
-        ffi=FixedFileVersion(1, 0, 25, 2),
+        ffi=FixedFileVersion(1, 0, 34, 0),
         kids=[
             StringFileInfo(
                 [
@@ -38,11 +38,11 @@ try:  # version 资源仅 Windows 构建机可用；拿不到就略过，不阻�
                         [
                             StringStruct("CompanyName", "Knowe"),
                             StringStruct("FileDescription", "Knowe Backend Service"),
-                            StringStruct("FileVersion", "1.0.25.2"),
+                            StringStruct("FileVersion", "1.0.34"),
                             StringStruct("InternalName", "KnoweBackend"),
                             StringStruct("OriginalFilename", "KnoweBackend.exe"),
                             StringStruct("ProductName", "Knowe"),
-                            StringStruct("ProductVersion", "1.0.25.2"),
+                            StringStruct("ProductVersion", "1.0.34"),
                         ],
                     )
                 ]

@@ -4,8 +4,8 @@
  * 分三块：显示修复（头像/Markdown/名字）、建群卡、布局交互。
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import ConvList from '../components/ConvList';
@@ -23,6 +23,7 @@ import {
 } from '../store/avatar';
 import { InboundEventSchema } from '../contract/envelope';
 import type { ApprovalCardData } from '../contract/envelope';
+import { installAutoLoadingImage } from '../test/image';
 
 function resetStore(): void {
   useKnoweStore.setState({
@@ -31,6 +32,7 @@ function resetStore(): void {
 }
 beforeEach(() => {
   resetStore();
+  installAutoLoadingImage();
   document.documentElement.classList.remove('clist-compact');
 });
 
@@ -72,7 +74,7 @@ describe('#5 项目经理不再全都长一张脸', () => {
   it('取的是 Coordinator 池（1..25），不是普通 agent 池', () => {
     for (let i = 0; i < 100; i++) {
       const url = coordinatorAvatar('coordinator', `p_${i}`);
-      const m = /^\/avatars\/Coordinator\/Coordinator_(\d{4})\.png$/.exec(url);
+      const m = /^\.\/avatars\/Coordinator\/Coordinator_(\d{4})\.png$/.exec(url);
       expect(m).not.toBeNull();
       const idx = Number(m![1]);
       expect(idx).toBeGreaterThanOrEqual(1);
@@ -104,19 +106,28 @@ const face = {
 };
 
 describe('#3 流式期间头像就该是头像', () => {
-  it('★ StreamBubble 渲染 <img>（原来它压根没传 src —— 所以流式时永远是文字）', () => {
+  it('★ StreamBubble 在预加载完成后渲染 <img>', async () => {
     const { container } = render(<StreamBubble text="正在写…" face={face} />);
-    expect(container.querySelector('img')).toHaveAttribute('src', face.avatarUrl);
+    await waitFor(() => {
+      expect(container.querySelector('img')).toHaveAttribute('src', face.avatarUrl);
+    });
   });
 
-  it('MessageBubble 也是', () => {
+  it('MessageBubble 也是', async () => {
     const { container } = render(<MessageBubble kind="agent" text="写完了" face={face} />);
-    expect(container.querySelector('img')).toHaveAttribute('src', face.avatarUrl);
+    await waitFor(() => {
+      expect(container.querySelector('img')).toHaveAttribute('src', face.avatarUrl);
+    });
   });
 
-  it('图片挂了才退回文字（兜底还在）', () => {
+  it('图片挂了才退回文字（兜底还在）', async () => {
     const { container } = render(<StreamBubble text="x" face={face} />);
-    fireEvent.error(container.querySelector('img')!);
+    const img = await waitFor(() => {
+      const loaded = container.querySelector('img');
+      expect(loaded).not.toBeNull();
+      return loaded as HTMLImageElement;
+    });
+    fireEvent.error(img);
 
     expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).toContain('小');
@@ -131,15 +142,17 @@ describe('#2 审批卡里的成员也有头像', () => {
     proposed: [{ id: 'fe_1', role: '前端' }],
   };
 
-  it('★ 提议的成员还没进花名册，也得有脸（不能退化成字形）', () => {
+  it('★ 提议的成员还没进花名册，预加载完成后也有脸', async () => {
     const { container } = render(
       <ApprovalCard
         cardId="ap_1" projectId="p1" tool="team" card={teamCard}
         state="pending" expiresAt={teamCard.expires_at} members={[]}
       />,
     );
-    const img = container.querySelector('.ap-row img');
-    expect(img).toHaveAttribute('src', expect.stringContaining('./avatars/agent/'));
+    await waitFor(() => {
+      expect(container.querySelector('.ap-row img'))
+        .toHaveAttribute('src', expect.stringContaining('./avatars/agent/'));
+    });
   });
 });
 
@@ -172,12 +185,12 @@ describe('#4 气泡渲染 Markdown', () => {
     const { container } = render(<Markdown text={'```py\nprint(1)\n```'} />);
     const pre = container.querySelector('pre')!;
     expect(pre).toHaveTextContent('print(1)');
-    expect(pre).toHaveAttribute('data-lang', 'py');
+    expect(pre.querySelector('code')).toHaveClass('language-py');
   });
 
   it('标题与引用', () => {
     const { container } = render(<Markdown text={'## 小标题\n> 引一句'} />);
-    expect(container.querySelector('.md-h')).toHaveTextContent('小标题');
+    expect(container.querySelector('h2')).toHaveTextContent('小标题');
     expect(container.querySelector('blockquote')).toHaveTextContent('引一句');
   });
 
@@ -186,10 +199,10 @@ describe('#4 气泡渲染 Markdown', () => {
     expect(container.querySelector('pre')).toHaveTextContent('let a = 1');
   });
 
-  it('★ 不认识的东西原样显示，绝不当 HTML 解释（模型输出是不可信文本）', () => {
+  it('★ 原始 HTML 整段丢弃，绝不当 HTML 执行（模型输出是不可信文本）', () => {
     const { container } = render(<Markdown text={'<script>alert(1)</script>'} />);
     expect(container.querySelector('script')).toBeNull();
-    expect(container.textContent).toContain('<script>alert(1)</script>');
+    expect(container).toHaveTextContent('');
   });
 
   it('用户自己打的字不做 Markdown 解释（他打了 ** 就该看见 **）', () => {
@@ -259,11 +272,13 @@ describe('#9 建群走审批卡（项目名可改）', () => {
     expect(approved).toEqual(['ap_p1']);        // 卡也落定了
   });
 
-  it('★ 项目 id 由 card_id 确定性派生 —— 必须和后端算得一样，否则会建出两个重名的群', () => {
-    expect(projectIdForCard('ap_abc')).toBe('p_ap_abc');
+  it('★ 审批卡使用 canonical 项目 id，并在重试时保持稳定', () => {
+    const first = projectIdForCard('ap_abc');
+    expect(first).toMatch(/^project_\d{14}$/);
+    expect(projectIdForCard('ap_abc')).toBe(first);
   });
 
-  it('名字清空 → 退回知知提的那个（不能建出一个没名字的群）', async () => {
+  it('名字清空 → 阻止确认并提示，不能建出一个没名字的群', async () => {
     // [v0.7 A0] 也需要目录
     window.knowe = { selectDirectory: () => Promise.resolve('/test/proj'), version: 'test', isElectron: true } as never;
     const created: [string, string][] = [];
@@ -278,7 +293,8 @@ describe('#9 建群走审批卡（项目名可改）', () => {
     await vi.waitFor(() => expect(screen.getByLabelText('项目目录')).toHaveValue('/test/proj'));
     await userEvent.click(screen.getByRole('button', { name: '确认' }));
 
-    expect(created[0]![1]).toBe('知知提的名字');
+    expect(created).toEqual([]);
+    expect(screen.getByRole('alert')).toHaveTextContent('项目得有个名字');
   });
 
   it('拒绝 → 不建任何项目', async () => {
@@ -308,9 +324,10 @@ describe('#14 左栏宽度', () => {
     expect(document.documentElement.style.getPropertyValue('--clist-w')).toBe('300px');
   });
 
-  it('★ 拖窄到阈值以下 → 进紧凑模式（藏名字，只留头像）', () => {
+  it('★ 拖窄到阈值以下 → 钳制到可完整显示 Logo 的最小宽度', () => {
     applyWidth(CLIST_COMPACT - 20);
-    expect(document.documentElement.classList.contains('clist-compact')).toBe(true);
+    expect(document.documentElement.style.getPropertyValue('--clist-w')).toBe(`${CLIST_COMPACT}px`);
+    expect(document.documentElement.classList.contains('clist-compact')).toBe(false);
 
     applyWidth(CLIST_DEFAULT);
     expect(document.documentElement.classList.contains('clist-compact')).toBe(false);

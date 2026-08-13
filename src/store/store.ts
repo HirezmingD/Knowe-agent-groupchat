@@ -260,7 +260,7 @@ function insertProjectOrder(draft: ConversationOrderDraft, pid: string): void {
   } else {
     let afterPins = 0;
     while (afterPins < draft.projectOrder.length
-           && !!draft.pinnedProjects[draft.projectOrder[afterPins]]) afterPins += 1;
+           && !!draft.pinnedProjects[draft.projectOrder[afterPins]!]) afterPins += 1;
     draft.projectOrder.splice(afterPins, 0, pid);
   }
   normalizeProjectOrder(draft);
@@ -280,7 +280,7 @@ function bumpProjectOrder(draft: ConversationOrderDraft, pid: string): void {
   draft.projectOrder.splice(idx, 1);
   let afterPins = 0;
   while (afterPins < draft.projectOrder.length
-         && !!draft.pinnedProjects[draft.projectOrder[afterPins]]) afterPins += 1;
+         && !!draft.pinnedProjects[draft.projectOrder[afterPins]!]) afterPins += 1;
   draft.projectOrder.splice(afterPins, 0, pid);
 }
 
@@ -329,7 +329,7 @@ function reconcileConversationStateAlias(
   if (!requestProjectId || !canonicalProjectId || requestProjectId === canonicalProjectId) return;
   const oldPinned = Object.prototype.hasOwnProperty.call(
     draft.pinnedProjects, requestProjectId,
-  ) ? draft.pinnedProjects[requestProjectId] : 0;
+  ) ? (draft.pinnedProjects[requestProjectId] ?? 0) : 0;
   const oldMuted = !!draft.mutedProjects[requestProjectId];
   const oldFolded = !!draft.foldedProjects[requestProjectId];
   const canonicalKnown = Object.prototype.hasOwnProperty.call(
@@ -455,7 +455,7 @@ function reconcileSnapshotAlias(requestProjectId: string, canonicalProjectId: st
     if (_snapQueue[i] === requestProjectId) _snapQueue[i] = canonicalProjectId;
   }
   for (let i = _snapQueue.length - 1; i >= 0; i -= 1) {
-    if (_snapQueue.indexOf(_snapQueue[i]) !== i) _snapQueue.splice(i, 1);
+    if (_snapQueue.indexOf(_snapQueue[i]!) !== i) _snapQueue.splice(i, 1);
   }
 }
 
@@ -594,6 +594,7 @@ export interface KnoweStore {
   toggleFoldedOpen: () => void;
 
   // ── Actions: Event handling ──
+  calibrateActivity: (projectId: string, activity: ActivityLedgerEntry[]) => void;
   handleEvent: (event: InboundEvent) => void;
   /**
    * [v1.0.23.6] 增量事件批量注入（HTTP 旁路预热通道专用）。
@@ -1082,7 +1083,7 @@ export const useKnoweStore = create<KnoweStore>()(
           if (belongsToDeletedProject(convId)) _synced.delete(convId);
         }
         for (let i = _snapQueue.length - 1; i >= 0; i -= 1) {
-          if (belongsToDeletedProject(_snapQueue[i])) _snapQueue.splice(i, 1);
+          if (belongsToDeletedProject(_snapQueue[i]!)) _snapQueue.splice(i, 1);
         }
 
         set((draft) => {
@@ -1423,7 +1424,8 @@ export const useKnoweStore = create<KnoweStore>()(
           applyEvent(conv, ev, agents, roleTypes);
         }
       });
-      scheduleTransientFrameFallback(projectId, pendingTransientFrameIds(get().convs[projectId]));
+      const updated = get().convs[projectId];
+      if (updated) scheduleTransientFrameFallback(projectId, pendingTransientFrameIds(updated));
     },
 
     ackTransientFrame(projectId: string, frameId: string): void {

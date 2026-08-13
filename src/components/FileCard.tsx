@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import '../styles/knowe-preview.css';
 
-const COLLAPSED_FILE_LIMIT = 3;
+export const FILE_CARD_COLLAPSE_LIMIT = 6;
 
 const FileCard: React.FC<{ file: ProducedFile; projectId: string }> = ({ file, projectId }) => {
   const { t } = useTranslation();
@@ -130,9 +130,9 @@ export const FileCardList: React.FC<{ files: ProducedFile[]; projectId: string }
     return true;
   });
   if (unique.length === 0) return null;
-  const collapsible = unique.length > COLLAPSED_FILE_LIMIT;
+  const collapsible = unique.length > FILE_CARD_COLLAPSE_LIMIT;
   const visible = collapsible && !expanded
-    ? unique.slice(0, COLLAPSED_FILE_LIMIT)
+    ? unique.slice(0, FILE_CARD_COLLAPSE_LIMIT)
     : unique;
   const hiddenCount = unique.length - visible.length;
   return (

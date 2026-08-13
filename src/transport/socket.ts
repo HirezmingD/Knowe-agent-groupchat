@@ -71,8 +71,7 @@ async function ensureAuthToken(): Promise<void> {
   authTokenReady = true;
 }
 
-function getAuthWsUrl(): string {
-  const base = runtimeWsUrl();
+function getAuthWsUrl(base = runtimeWsUrl()): string {
   if (!authTokenCache) return base;
   const sep = base.includes('?') ? '&' : '?';
   return `${base}${sep}token=${encodeURIComponent(authTokenCache)}`;
@@ -704,7 +703,7 @@ export function createSocket({ url = runtimeWsUrl(), callbacks }: SocketConfig):
     }
 
     // [v1.0.18.4] URL 带 token query 参数，绕过 onBeforeSendHeaders 的 ws:// 不匹配问题
-    const tokenUrl = getAuthWsUrl();
+    const tokenUrl = getAuthWsUrl(url);
     ws = new WebSocket(tokenUrl);
     const thisSocket = ws;
 

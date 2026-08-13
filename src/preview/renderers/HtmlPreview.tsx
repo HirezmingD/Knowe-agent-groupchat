@@ -7,6 +7,21 @@ import { useTranslation } from 'react-i18next';
 
 type LoadState = 'fetching' | 'ready' | 'error';
 
+const HTML_SANDBOX_CSP = (
+  "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+  + "img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; "
+  + "frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+);
+
+/** Put a restrictive CSP before any project-controlled byte can be parsed. */
+export function sandboxedHtmlSource(content: string): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${HTML_SANDBOX_CSP}">`;
+  // Never search/replace a project-provided <head>: it may occur inside a comment,
+  // template, or malformed token. A fresh wrapper guarantees the policy is parsed
+  // first. The iframe sandbox below independently disables scripts and forms.
+  return `<!doctype html><html><head>${meta}</head><body>${content}</body></html>`;
+}
+
 const HtmlPreview: React.FC<{ file: PreviewFilePayload; projectId: string }> = ({
   file,
   projectId,
@@ -53,8 +68,8 @@ const HtmlPreview: React.FC<{ file: PreviewFilePayload; projectId: string }> = (
         <iframe
           className="pv-html-frame"
           title={file.name}
-          srcDoc={htmlContent}
-          sandbox="allow-scripts allow-forms allow-modals allow-popups allow-pointer-lock"
+          srcDoc={sandboxedHtmlSource(htmlContent)}
+          sandbox=""
           referrerPolicy="no-referrer"
         />
       )}

@@ -12,8 +12,11 @@ from pathlib import Path
 import pytest
 
 import backend.engine as engine_module
-from backend.engine import ACTION_CONTRACT, COORDINATOR, COORDINATOR_ROLE, ProjectEngine
+from backend.engine import COORDINATOR, COORDINATOR_ROLE, ProjectEngine, _engine_block
 from backend.hub import Hub
+
+
+ACTION_CONTRACT = _engine_block("ACTION_CONTRACT", lang="zh")
 
 
 class _FakeCoordinator:
@@ -154,5 +157,5 @@ def test_action_contract_remains_last_and_short() -> None:
     block = source.split("agent = self._get_or_create_coordinator()", 1)[1].split(
         "self.repair_agent_history(agent)", 1
     )[0]
-    assert block.rindex("ACTION_CONTRACT") > block.rindex("dm_context")
+    assert block.rindex('_engine_block("ACTION_CONTRACT")') > block.rindex("dm_context")
     assert len(ACTION_CONTRACT) < 1000

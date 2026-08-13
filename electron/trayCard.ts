@@ -15,7 +15,7 @@
  *   shouldUseDarkColors 决定（这是主进程能拿到的、离用户系统偏好最近的信号）。
  */
 
-import { BrowserWindow, screen, nativeTheme, app, type Rectangle } from 'electron';
+import { BrowserWindow, screen, nativeTheme, app, type Rectangle, type WebContents } from 'electron';
 import { join, dirname } from 'node:path';
 import { existsSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import type { UnreadDetail } from '../src/shared/bridge';
@@ -68,6 +68,11 @@ export function isTrayCardOpen(): boolean {
   return !!cardWindow && !cardWindow.isDestroyed();
 }
 
+/** IPC must originate from this card, not another renderer sharing its channels. */
+export function isTrayCardSender(sender: WebContents): boolean {
+  return !!cardWindow && !cardWindow.isDestroyed() && sender === cardWindow.webContents;
+}
+
 /** 延迟关闭卡片——给人从托盘图标移动到卡片上的时间。如果在延迟期间调了 cancel 就不关。 */
 export function scheduleDestroyTrayCard(): void {
   cancelDestroyTrayCard();
@@ -103,7 +108,7 @@ function calcWindowBounds(trayBounds: Rectangle, itemCount: number): Rectangle {
   const winH = visibleH + BLEED_TOP + BLEED_BOTTOM;
 
   // 始终优先：图标正上方、水平居中。
-  let cardX = trayBounds.x + trayBounds.width / 2 - CARD_WIDTH / 2;
+  const cardX = trayBounds.x + trayBounds.width / 2 - CARD_WIDTH / 2;
   let cardY = trayBounds.y - visibleH - CARD_GAP;
 
   if (cardY < sy) {
@@ -125,12 +130,12 @@ function calcWindowBounds(trayBounds: Rectangle, itemCount: number): Rectangle {
 /** 找到真正存在的托盘卡片 preload 产物；照 main.ts resolvePreloadPath() 的探测方式抄一遍。 */
 function resolveTrayCardPreloadPath(): string {
   const dir = join(__dirname, '..', 'preload');
-  const candidates = ['trayCard.mjs', 'trayCard.js', 'trayCard.cjs'];
+  const candidates = ['trayCard.cjs'];
   for (const name of candidates) {
     const p = join(dir, name);
     if (existsSync(p)) return p;
   }
-  const fallback = join(dir, 'trayCard.js');
+  const fallback = join(dir, 'trayCard.cjs');
   console.error(
     `[trayCard] ⚠ 在 ${dir} 下没找到托盘卡片 preload 产物（试过 ${candidates.join(' / ')}）。` +
     `先跑一次 electron-vite build/dev；现回退到 ${fallback}。`,
@@ -150,14 +155,14 @@ function resolveTrayCardPreloadPath(): string {
  *
  * 输入形态（前端传的）：
  *   './avatars/agent/avatar_0001.png'（相对路径，主力）
- *   'http(s)://...'（外链/老数据，data: 页面可加载 http 图片，原样返回）
+ *   'http(s)://...'（外链/老数据，拒绝；托盘悬浮不应产生第三方请求）
  *   'data:image/...'（已是内联，原样返回）
  *   ''（无头像）
  */
 function resolveAvatarUrl(relOrAbs: string): string {
   if (!relOrAbs) return '';
   if (/^data:image\//i.test(relOrAbs)) return relOrAbs;
-  if (/^https?:\/\//i.test(relOrAbs)) return relOrAbs;
+  if (/^https?:\/\//i.test(relOrAbs)) return '';
   // 相对路径 → 磁盘文件 → base64
   const rel = relOrAbs.replace(/^\.?\//, ''); // './avatars/x.png' → 'avatars/x.png'
   // dev：public/ 在项目根（vite dev server 直接服务它，out/renderer 无拷贝）
@@ -187,6 +192,7 @@ function buildHtml(dark: boolean): string {
 <html class="${dark ? 'dark' : ''}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <style>
   :root {
     --surface:#FFFFFF; --surface-hover:rgba(247,250,255,.72); --surface-active:#edf5ff;
@@ -384,7 +390,7 @@ export function createTrayCard(trayBounds: Rectangle, details: UnreadDetail[]): 
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       preload: resolveTrayCardPreloadPath(),
     },
   });

@@ -47,7 +47,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.engine as E                                          # noqa: E402
+from backend import runtime_settings                                # noqa: E402
 from backend.engine import ProjectEngine                            # noqa: E402
+from backend.i18n_backend import msg                                 # noqa: E402
 
 
 class FakeHub:
@@ -229,19 +231,22 @@ def test_matching_text_still_replays_once(monkeypatch) -> None:
 
 # ═══════════ ④ v0.23 里**保留**的那部分（派活话术）═══════════
 
-def test_dispatch_tool_result_still_free_of_jargon() -> None:
+def test_dispatch_tool_result_still_free_of_jargon(monkeypatch) -> None:
     """
     现行协议由可见派单卡承担“谁去做、做什么”，工具回执不得再诱导总管
     复述卡片或承诺后台报告/审阅流程。
     """
     from backend import tools_knowe
+    monkeypatch.setattr(runtime_settings, "language", lambda: "zh")
     src = Path(tools_knowe.__file__).read_text("utf-8")
     assert 'message=f"任务已派给' not in src
     block = src.rsplit('engine.record_committed_action("propose_next")', 1)[1][:12000]
     message_block = block.split("message=(", 1)[1].split(").replace", 1)[0]
-    assert "卡把话说完了" in message_block
-    assert "NOTHING_TO_ADD" in message_block
-    assert "谁去做、做什么" not in message_block
+    assert 'msg("tools_knowe.py.279")' in message_block
+    localized = "".join(msg(f"tools_knowe.py.{key}") for key in (334, 278, 279, 280, 281, 282, 283, 284))
+    assert "卡把话说完了" in localized
+    assert "NOTHING_TO_ADD" in localized
+    assert "谁去做、做什么" not in localized
 
 
 def test_coordinator_soul_uses_structured_state_not_a_word_blacklist() -> None:

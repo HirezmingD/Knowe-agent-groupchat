@@ -33,11 +33,11 @@ The Harness (`backend/knowe_harness/`, ~4,300 lines) is the mechanism layer that
 
 ## Development
 
-Requirements: Node.js 20+, Python 3.11, and a model API key (e.g. DeepSeek).
+Requirements: Node.js 22.12+, Python 3.11, and a model API key (e.g. DeepSeek).
 
 ```bash
 # install frontend dependencies
-npm install
+npm ci
 
 # install backend dependencies
 pip install -r backend/requirements.txt
@@ -67,6 +67,7 @@ Configuration is read from environment variables (see `backend/config.py`). Key 
 | `DEEPSEEK_BASE_URL` | Custom provider base URL |
 | `KNOWE_AGENT` | Agent mode: `fake` (offline, no LLM) or `deepseek` |
 | `KNOWE_DATA_DIR` | Override data directory |
+| `KNOWE_MXC_EXECUTABLE` | Absolute path to the pinned native terminal sandbox runner (normally injected by Electron) |
 
 A `.env` file is supported (via python-dotenv) — never commit it.
 
@@ -85,7 +86,7 @@ npm run copy:chromium
 npm run dist:win
 ```
 
-Output lands in `release/` as `Knowe Setup <version>.exe`.
+Output lands in `release/` as `Knowe-Setup-<version>.exe`.
 
 > **Note**: after changing backend code, you MUST re-run step 1 (PyInstaller) — electron-builder only assembles the frontend and does not rebuild the backend. Verify the bundled `KnoweBackend.exe` timestamp is fresh after packaging.
 
@@ -93,7 +94,11 @@ Output lands in `release/` as `Knowe Setup <version>.exe`.
 
 - All data lives **locally** under the install directory: `data/` (projects, chat history, knowledge base, token ledger)
 - Chat history is never deleted by the app
-- Agents operate inside a sandboxed project directory — they cannot touch files outside the project root
+- File tools are constrained by path validation; model-authored shell/Python processes run in a Windows OS sandbox with the workspace as their only writable root and no network
+- Terminal execution requires Windows 11 build 26100+ and a successful native MXC probe; unsupported or failed isolation disables the terminal instead of falling back to a host shell
+- MXC 0.7 is an upstream early preview. The shipped AppContainer + Job containment is defense in depth and is regression-tested on the target host, but it is not represented as a VM-grade or independently audited security boundary
+- UI-configured provider keys are encrypted at rest with current-user Windows DPAPI and never enter terminal child environments
+- Browser automation retains Chromium's sandbox and permits public HTTP(S) only; local/LAN/link-local/reserved destinations are blocked
 - No telemetry, no cloud storage: everything stays on your machine
 
 ## Common issues

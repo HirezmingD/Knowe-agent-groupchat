@@ -22,8 +22,8 @@ config.py 是「装机常量」：进程起来就定死（frozen dataclass）。
     前端下发 null / 0 都归一到 None，Gate 不创建自动 timeout 任务。
 
 ── Key 的去向 ──
-API Key 随设置落在 CONFIG.data_dir/settings.json（0600 权限），与 DEEPSEEK_API_KEY
-环境变量同一台机器、同一信任边界；不出本机。
+API Key 在进程内保持现有绑定结构；落到 CONFIG.data_dir/settings.json 前由 Windows
+当前用户 DPAPI 保护。磁盘文件和加密备份都不含明文，读取/解密双失败时 fail closed。
 """
 
 from __future__ import annotations
@@ -33,9 +33,7 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import secrets
-import stat
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +44,17 @@ from typing import Any, Iterator, Mapping
 
 from knowe_core.provider_identity import http_status_error_message, provider_target
 from .i18n_backend import msg
+from .secret_protection import (
+    SecretProtectionError,
+    SecretProtector,
+    default_secret_protector,
+)
+from .settings_storage import (
+    SettingsStorageError,
+    SettingsStorageUnavailable,
+    load_settings,
+    save_settings,
+)
 
 log = logging.getLogger("knowe.settings")
 
@@ -115,7 +124,20 @@ def _default_state() -> dict[str, Any]:
 
 _state: dict[str, Any] = _default_state()
 _loaded = False
+_load_error: SettingsStorageError | None = None
+_secret_protector_override: SecretProtector | None = None
 _model_waiters: set[asyncio.Event] = set()
+
+
+def _secret_protector() -> SecretProtector:
+    """Resolve the production DPAPI protector or a test-only injected protector."""
+
+    if _secret_protector_override is not None:
+        return _secret_protector_override
+    try:
+        return default_secret_protector()
+    except SecretProtectionError as exc:
+        raise SettingsStorageUnavailable(exc.code) from exc
 
 
 def _settings_path() -> Path | None:
@@ -128,33 +150,60 @@ def _settings_path() -> Path | None:
 
 
 def _ensure_loaded() -> None:
-    global _loaded
+    global _loaded, _load_error
     if _loaded:
         return
-    _loaded = True
+    if _load_error is not None:
+        raise _load_error
     path = _settings_path()
-    if path is None or not path.exists():
+    if path is None:
+        _loaded = True
         return
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            base = _default_state()
-            base.update({k: raw[k] for k in base.keys() & raw.keys()})
-            if not str(base.get("fingerprint_salt") or "").strip():
-                base["fingerprint_salt"] = secrets.token_hex(32)
-            try:
-                base["settings_revision"] = max(0, int(base.get("settings_revision") or 0))
-            except (TypeError, ValueError):
-                base["settings_revision"] = 0
-            _state.update(base)
-            # Upgrade compatibility: a pre-v1.0.13 persisted main binding was already
-            # effective in production, so activate it once during migration.  A truly
-            # new install starts without a binding and still requires test→apply.
-            if raw.get("main_model") and "active_model_fingerprint" not in raw:
-                _state["active_model_fingerprint"] = binding_fingerprint(raw.get("main_model"))
+        loaded = load_settings(path, _secret_protector())
+        if loaded.value is None:
+            _loaded = True
+            return
+        raw = loaded.value
+        base = _default_state()
+        base.update({k: raw[k] for k in base.keys() & raw.keys()})
+        if not str(base.get("fingerprint_salt") or "").strip():
+            base["fingerprint_salt"] = secrets.token_hex(32)
+        try:
+            base["settings_revision"] = max(0, int(base.get("settings_revision") or 0))
+        except (TypeError, ValueError):
+            base["settings_revision"] = 0
+        # Upgrade compatibility: a pre-v1.0.13 persisted main binding was already
+        # effective in production, so activate it once during migration.  A truly
+        # new install starts without a binding and still requires test→apply.
+        if raw.get("main_model") and "active_model_fingerprint" not in raw:
+            base["active_model_fingerprint"] = _binding_fingerprint_with_state(
+                raw.get("main_model"), base,
+            )
+        # The plaintext legacy file remains untouched until a fully protected candidate
+        # and encrypted backup have both passed round-trip verification.
+        if loaded.needs_migration:
+            save_settings(path, base, _secret_protector())
+        _state.clear()
+        _state.update(base)
+        _loaded = True
+        _load_error = None
+        if loaded.recovered_from_backup:
+            log.warning("settings recovered from encrypted backup: %s", path)
+        else:
             log.info(msg("runtime_settings.py.001"), path)
-    except Exception as exc:  # noqa: BLE001 — settings.json 坏了不该拖死后端
-        log.warning(msg("runtime_settings.py.002"), exc)
+    except SettingsStorageError as exc:
+        # Fail closed: do not publish defaults and do not allow a later unrelated save
+        # to overwrite credentials that merely failed to decrypt under this user.
+        unavailable = (
+            exc if isinstance(exc, SettingsStorageUnavailable)
+            else SettingsStorageUnavailable(exc.code)
+        )
+        _load_error = unavailable
+        log.error("settings storage unavailable: %s", exc.code)
+        if unavailable is exc:
+            raise
+        raise unavailable from exc
 
 
 def _persist(candidate: Mapping[str, Any] | None = None) -> None:
@@ -163,15 +212,7 @@ def _persist(candidate: Mapping[str, Any] | None = None) -> None:
     if path is None:
         return
     value = _state if candidate is None else candidate
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Key 在里面——收紧到 0600（Windows 上 chmod 是尽力而为，本来也是单用户目录）。
-    try:
-        os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
-    tmp.replace(path)
+    save_settings(path, value, _secret_protector())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -285,15 +326,11 @@ def _binding_complete(binding: dict[str, str] | None) -> bool:
     )
 
 
-def binding_fingerprint(raw: Any) -> str | None:
-    """Return an opaque, stable per-install HMAC fingerprint for one binding.
+def _binding_fingerprint_with_state(
+    raw: Any, state: Mapping[str, Any],
+) -> str | None:
+    """Fingerprint helper that is safe to use while an on-disk state is loading."""
 
-    The covered fields are the exact apply/test transaction boundary requested by the
-    first-run gate.  The API key is HMACed as part of the whole canonical message and is
-    never returned or logged.
-    """
-
-    _ensure_loaded()
     binding = _norm_binding(raw)
     if binding is None:
         return None
@@ -304,9 +341,21 @@ def binding_fingerprint(raw: Any) -> str | None:
         binding["transport"].strip().casefold(),
         binding["api_key"],
     )).encode("utf-8")
-    salt = str(_state.get("fingerprint_salt") or "").encode("utf-8")
+    salt = str(state.get("fingerprint_salt") or "").encode("utf-8")
     digest = hmac.new(salt, canonical, hashlib.sha256).hexdigest()
     return f"sha256:{digest}"
+
+
+def binding_fingerprint(raw: Any) -> str | None:
+    """Return an opaque, stable per-install HMAC fingerprint for one binding.
+
+    The covered fields are the exact apply/test transaction boundary requested by the
+    first-run gate.  The API key is HMACed as part of the whole canonical message and is
+    never returned or logged.
+    """
+
+    _ensure_loaded()
+    return _binding_fingerprint_with_state(raw, _state)
 
 
 def public_binding(raw: Any) -> dict[str, Any] | None:
