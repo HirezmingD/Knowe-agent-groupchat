@@ -161,6 +161,8 @@ const TOOL_FAMILIES: ReadonlyArray<readonly [string, string, WorkStage]> = [
 
 function clampOneLine(value: string, limit: number): string {
   const oneLine = value
+    // Intentional C0/DEL stripping before model-provided details reach the UI.
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

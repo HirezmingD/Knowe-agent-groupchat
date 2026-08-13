@@ -23,7 +23,7 @@ import {
 const base = { project_id: 'p1', ts: '2026-01-01T00:00:00Z' };
 
 function conv(): Conv {
-  return { projectId: 'p1', projectName: 'p1', items: [], members: [], banner: null, draft: '' };
+  return { projectId: 'p1', projectName: 'p1', items: [], members: [], banner: null, draft: '', unread: 0 };
 }
 function apply(c: Conv, ev: unknown): void {
   applyEvent(c, ev as never, DEFAULT_AGENTS, DEFAULT_ROLE_TYPES);
@@ -109,7 +109,7 @@ describe('v0.23 问题二 · 推理可见性', () => {
     }
     const acts = (c.items[0] as AgentItem).activities!;
     expect(acts.length).toBeLessThanOrEqual(6);
-    expect(acts[acts.length - 1].tool).toBe('tool_39');     // 留的是最近的
+    expect(acts[acts.length - 1]!.tool).toBe('tool_39');     // 留的是最近的
   });
 
   it('没有流式气泡时 tool_gen 自愈建立过程气泡', () => {
@@ -174,7 +174,8 @@ describe('v0.23 问题二 · 推理可见性', () => {
     apply(c, { type: 'agent_thinking', agent_id: 'be_1', seq: 2, ...base });
     apply(c, { type: 'tool_gen', agent_id: 'fe_1', tool_name: 'safe_patch', seq: 3, ...base });
 
-    expect((c.items[0] as AgentItem).activities).toEqual([{ tool: 'safe_patch', n: 1 }]);
+    expect((c.items[0] as AgentItem).activities)
+      .toEqual([{ tool: 'safe_patch', n: 1, pendingDetail: true }]);
     expect((c.items[1] as AgentItem).activities).toBeUndefined();
   });
 });
@@ -203,7 +204,7 @@ describe('v0.23 问题二 · 工具名翻成人话', () => {
   it('原子工具名与参数只出现在默认折叠的技术详情', () => {
     expect(toolTechnicalDetail(`safe_read_file${TOOL_ACTIVITY_SEPARATOR}src/store/state.ts`))
       .toBe('读取项目文件 · src/store/state.ts');
-    expect(toolTechnicalDetail('quantum_teleport')).toBe('调用 quantum_teleport');
+    expect(toolTechnicalDetail('quantum_teleport')).toBe('调用 quantum_teleport（未知工具兜底）');
   });
 
   it('完成阶段不会残留“✓ 正在……”的矛盾文案', () => {
@@ -248,7 +249,7 @@ describe('v0.23 问题三 · 卡片和它上面那句话', () => {
 
     const agents = c.items.filter((x) => x.kind === 'agent') as AgentItem[];
     expect(agents).toHaveLength(1);
-    expect(agents[0].text).toBe('好，我派给宋陈。');
+    expect(agents[0]!.text).toBe('好，我派给宋陈。');
   });
 });
 

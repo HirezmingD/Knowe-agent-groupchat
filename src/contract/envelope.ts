@@ -1127,6 +1127,14 @@ export const AddAgentsCmdSchema = z.object({
 });
 export type AddAgentsCmd = z.infer<typeof AddAgentsCmdSchema>;
 
+/** Stop one active worker without shutting down the whole project engine. */
+export const StopWorkerCmdSchema = z.object({
+  type: z.literal('stop_worker'),
+  project_id: z.string(),
+  agent_id: z.string(),
+});
+export type StopWorkerCmd = z.infer<typeof StopWorkerCmdSchema>;
+
 /**
  * 请求事件回放
  *
@@ -1202,6 +1210,7 @@ export const OutboundCommandSchema = z.discriminatedUnion('type', [
   FeedbackInstructionCmdSchema,
   CreateProjectCmdSchema,
   AddAgentsCmdSchema,
+  StopWorkerCmdSchema,
   ReplayRequestCmdSchema,
   RequestSnapshotCmdSchema,
   SetProjectDirectoryCmdSchema,

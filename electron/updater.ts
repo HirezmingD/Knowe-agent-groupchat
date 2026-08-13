@@ -21,12 +21,16 @@ const { autoUpdater } = updaterPkg;
 
 import { IPC, type UpdateStatus } from '../src/shared/bridge';
 
-/** updaterCacheDirName（app-update.yml 已定，与 electron-builder 生成一致）。 */
-const UPDATER_CACHE_DIR_NAME = 'knowe-updater';
-
 /** 当前状态单例（渲染层 getUpdateStatus 直接拿它）。 */
 let status: UpdateStatus = { state: 'idle', progress: 0 };
 let initialized = false;
+
+/**
+ * 本地加固构建不能自动信任并安装第三方上游 Release：那会把本地沙箱、密钥存储和
+ * 发布门禁整体覆盖。只有操作者明确设置环境变量时才允许访问旧的 upstream channel。
+ * 重新启用前应把发布源迁到受控、签名且经过同等安全门禁的发行渠道。
+ */
+const UPSTREAM_UPDATES_ENABLED = process.env.KNOWE_ENABLE_UPSTREAM_UPDATES === '1';
 
 /** [v1.0.26.2] 手动检查「已是最新」提示的展示时长，超时自动回 idle。 */
 const UP_TO_DATE_HINT_MS = 2500;
@@ -54,6 +58,11 @@ export function initAutoUpdater(hooks: { log: UpdaterLogger; onInstall: () => Pr
   if (initialized) return;
   initialized = true;
   const log = hooks.log;
+
+  if (!UPSTREAM_UPDATES_ENABLED) {
+    log('[updater] 本地加固构建已禁用第三方上游自动更新');
+    return;
+  }
 
   autoUpdater.autoDownload = true;           // PRD 3.2：发现新版立即后台下载
   autoUpdater.autoInstallOnAppQuit = false;  // PRD 3.4：用户手动触发安装
@@ -107,6 +116,16 @@ export function getUpdateStatus(): UpdateStatus {
  * @param silent true = 启动静默检查（失败不推送 error，保持 idle）；false = 手动检查（失败推送 error）。
  */
 export async function checkForUpdates(silent: boolean): Promise<void> {
+  if (!UPSTREAM_UPDATES_ENABLED) {
+    if (!silent) {
+      push({
+        state: 'error',
+        progress: 0,
+        message: '本地加固构建已禁用上游自动更新；请只安装经过安全门禁的签名版本。',
+      });
+    }
+    return;
+  }
   lastCheckWasManual = !silent;
   try {
     await autoUpdater.checkForUpdates();
@@ -127,6 +146,7 @@ export async function checkForUpdates(silent: boolean): Promise<void> {
  * 再 quitAndInstall（安装器静默升级、保留数据，完成后以 --updated 拉起新版）。
  */
 export async function installUpdate(hooks: { onInstall: () => Promise<void> }): Promise<void> {
+  if (!UPSTREAM_UPDATES_ENABLED) return;
   if (status.state !== 'ready') return;
   try {
     await hooks.onInstall();

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 BACKEND = Path(__file__).resolve().parents[1]
-SRC = BACKEND / "backend" / "runtime_settings.py"
+SRC = BACKEND / "runtime_settings.py"
 
 
 def _load_redactor():

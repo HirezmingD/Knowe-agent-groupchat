@@ -4,7 +4,7 @@
  * 每条测试都对应一个「和洲能在屏幕上看到」的事实。
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { useKnoweStore } from '../store/store';
 import type { ConnStatus } from '../store/state';
@@ -102,14 +102,14 @@ describe('ConvList · 项目列表', () => {
     expect(screen.getByText('待确认')).toBeTruthy();
   });
 
-  it('搜索框过滤项目', () => {
+  it('全局搜索框筛出匹配项目', () => {
     seedConv('p1', { name: '官网改版' });
     seedConv('p2', { name: '数据看板' });
     render(<ConvList />);
 
-    fireEvent.change(screen.getByLabelText('搜索项目'), { target: { value: '看板' } });
+    fireEvent.change(screen.getByLabelText('全局搜索'), { target: { value: '看板' } });
     expect(screen.queryByText('官网改版')).toBeNull();
-    expect(screen.getByText('数据看板')).toBeTruthy();
+    expect(screen.getByRole('option')).toHaveTextContent('数据看板');
   });
 
   it('＋ → 弹窗 → 创建 → 走 socket.createProject（前端先本地注册再发指令）', async () => {

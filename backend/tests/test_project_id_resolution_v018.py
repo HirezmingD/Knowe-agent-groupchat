@@ -115,10 +115,15 @@ def test_old_p_ap_client_maps_to_one_canonical_project(server) -> None:
     assert server._canonical_project_id_from_request(request_id) == canonical
 
 
-def test_create_project_retry_reconciles_to_existing_approval_binding(server) -> None:
+def test_create_project_retry_reconciles_to_existing_approval_binding(
+    server, tmp_path,
+) -> None:
     approval_id = "ap_retry"
     canonical = "project_20260715123000"
     retry_id = "project_20260715123001"
+    workspace = tmp_path / "retry-workspace"
+    workspace.mkdir()
+    project_dir = str(workspace.resolve())
     server._test_pending_cards.add(approval_id)
     server._directory_required_info = lambda _project_id: None
 
@@ -130,7 +135,9 @@ def test_create_project_retry_reconciles_to_existing_approval_binding(server) ->
         project_dir: str | None = None,
         *,
         request_project_id: str | None = None,
+        roles: list[str] | None = None,
     ) -> str:
+        assert roles == []
         created.append((project_id, project_name, project_dir, request_project_id))
         server.hub.projects[project_id] = SimpleNamespace(name=project_name, unread_count=0)
         return project_id
@@ -141,17 +148,17 @@ def test_create_project_retry_reconciles_to_existing_approval_binding(server) ->
         "type": "create_project",
         "project_id": canonical,
         "project_name": "唯一群",
-        "project_dir": "/tmp/work",
+        "project_dir": project_dir,
         "approval_id": approval_id,
     }))
-    assert created == [(canonical, "唯一群", "/tmp/work", None)]
+    assert created == [(canonical, "唯一群", project_dir, None)]
 
     # Simulate a renderer retry that proposes another canonical id for the same card.
     asyncio.run(server._cmd_create_project(None, {
         "type": "create_project",
         "project_id": retry_id,
         "project_name": "唯一群",
-        "project_dir": "/tmp/work",
+        "project_dir": project_dir,
         "approval_id": approval_id,
     }))
 

@@ -1,8 +1,8 @@
 """项目经理显示名随语言实时（v1.0.22.1-对齐修复）。
 
 背景：COORDINATOR_ROLE = msg("engine.007") 是模块级固化——英文模式启动后
-切回中文，项目经理名/角色仍显示 Coordinator。修复：显示路径全部现取 msg()。
-本文件守住这条语义：语言切回 zh → 项目经理名=「项目经理」；切 en → Coordinator。
+切回中文，项目经理名/角色仍显示旧英文快照。修复：显示路径全部现取 msg()。
+本文件守住这条语义：语言切回 zh → 项目经理名=「项目经理」；切 en → Leader。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def test_coordinator_member_name_follows_language(monkeypatch) -> None:
     monkeypatch.setattr(runtime_settings, "language", lambda: "zh")
     assert eng.member_name("coordinator") == "项目经理"
     monkeypatch.setattr(runtime_settings, "language", lambda: "en")
-    assert eng.member_name("coordinator") == "Coordinator"
+    assert eng.member_name("coordinator") == "Leader"
     # 切回中文必须立即回到「项目经理」（不缓存、不读旧语言快照）
     monkeypatch.setattr(runtime_settings, "language", lambda: "zh")
     assert eng.member_name("coordinator") == "项目经理"
@@ -36,7 +36,7 @@ def test_coordinator_reserve_name_follows_language(monkeypatch) -> None:
     monkeypatch.setattr(runtime_settings, "language", lambda: "zh")
     assert eng.reserve_name("coordinator", "项目经理") == "项目经理"
     monkeypatch.setattr(runtime_settings, "language", lambda: "en")
-    assert eng.reserve_name("coordinator", "Coordinator") == "Coordinator"
+    assert eng.reserve_name("coordinator", "Coordinator") == "Leader"
 
 
 def test_coordinator_identity_follows_language(monkeypatch) -> None:
@@ -47,7 +47,8 @@ def test_coordinator_identity_follows_language(monkeypatch) -> None:
     assert ident["role"] == "项目经理"
     monkeypatch.setattr(runtime_settings, "language", lambda: "en")
     ident = eng.identity("coordinator")
-    assert ident["name"] == "Coordinator"
+    assert ident["name"] == "Leader"
+    assert ident["role"] == "Leader"
 
 
 class _FakeStore:

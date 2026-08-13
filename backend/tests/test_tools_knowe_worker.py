@@ -33,6 +33,27 @@ def _engine(tmp_path: Path) -> FakeEngine:
     return FakeEngine(workspace, internal)
 
 
+def _filesystem_alias(link: Path, target: Path) -> str:
+    """Create an unsafe alias without requiring Windows Developer Mode.
+
+    A real symlink exercises the reparse-point path.  Standard Windows test accounts often
+    lack SeCreateSymbolicLinkPrivilege, so use a hard link there; the broker deliberately
+    rejects both alias types because neither proves workspace ownership.
+    """
+
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        try:
+            link.hardlink_to(target)
+        except OSError as hardlink_exc:
+            pytest.skip(f"filesystem aliases are unavailable: {hardlink_exc}")
+        return "hard link"
+    return "reparse point"
+
+
 def _call(registry, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     raw = asyncio.run(registry.execute(name, arguments))
     value = json.loads(raw)
@@ -147,7 +168,7 @@ def test_project_traversal_and_symlinks_are_rejected(tmp_path: Path) -> None:
     engine = _engine(tmp_path)
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    (engine.workspace_root / "link.txt").symlink_to(outside)
+    alias_kind = _filesystem_alias(engine.workspace_root / "link.txt", outside)
     registry = tools_knowe.build_worker_registry(engine, "worker-1")
 
     traversal = _call(registry, "safe_read_file", {"path": "../outside.txt"})
@@ -155,7 +176,7 @@ def test_project_traversal_and_symlinks_are_rejected(tmp_path: Path) -> None:
 
     assert traversal["status"] == "error"
     assert symlink["status"] == "error"
-    assert "symbolic" in symlink["message"].lower()
+    assert alias_kind in symlink["message"].lower()
 
 
 def test_delete_available_without_intent_and_verifies_absence(tmp_path: Path) -> None:
@@ -187,8 +208,10 @@ def test_external_roots_are_authorized_redacted_and_copy_verified(tmp_path: Path
     source.write_text("one\ntwo\nthree\n", encoding="utf-8")
     other = tmp_path / "unauthorized.txt"
     other.write_text("no", encoding="utf-8")
+    alias_target = tmp_path / "alias-target.txt"
+    alias_target.write_text("linked", encoding="utf-8")
     link = external / "link.txt"
-    link.symlink_to(source)
+    alias_kind = _filesystem_alias(link, alias_target)
 
     registry = tools_knowe.build_worker_registry(
         engine,
@@ -233,7 +256,7 @@ def test_external_roots_are_authorized_redacted_and_copy_verified(tmp_path: Path
     linked = _call(registry, "read_external_file", {"path": str(link)})
     assert unauthorized["status"] == "error"
     assert linked["status"] == "error"
-    assert "symbolic" in linked["message"].lower()
+    assert alias_kind in linked["message"].lower()
 
 
 def test_disabled_services_stay_registered_and_return_stable_errors(

@@ -7,7 +7,7 @@
 
 # 30 Configuration · Models and Providers
 
-> **At a glance**: the model is the brain the team works with. This page covers how models are bound and switched in Knowe: the **primary model** is the default working brain (with the connection test and the mandatory first-run setup); the **fallback model** is the automatic safety net when the primary model is unavailable; **per-member model binding** lets individual members run on different models (and when it's worth it); and finally the **API Key** security notes — kept on this machine only, never written to browser storage, clearable anytime.
+> **At a glance**: the model is the brain the team works with. This page covers how models are bound and switched in Knowe: the **primary model** is the default working brain (with the connection test and the mandatory first-run setup); the **fallback model** is the automatic safety net when the primary model is unavailable; **per-member model binding** lets individual members run on different models (and when it's worth it); and finally the **API Key** security notes — encrypted locally with Windows DPAPI, never written to browser storage, and clearable anytime.
 
 **On this page**
 
@@ -15,7 +15,7 @@
 - [First launch: mandatory setup](#first-launch-mandatory-setup)
 - [The fallback model and automatic fallback](#the-fallback-model-and-automatic-fallback)
 - [Per-member model binding: when it's worth it](#per-member-model-binding-when-its-worth-it)
-- [API Key security: not written to disk](#api-key-security-not-written-to-disk)
+- [API Key security: encrypted local storage](#api-key-security-not-written-to-disk)
 - [Common questions](#common-questions)
 - [Next steps](#next-steps)
 
@@ -29,7 +29,7 @@ In **Settings → Models and Providers**, you can change the three ingredients o
 
 - **Provider** — Knowe ships with 20+ built-in providers (DeepSeek, Z.AI / GLM, Kimi / Moonshot, Qwen Cloud, MiniMax, StepFun, Tencent TokenHub, OpenRouter, Anthropic, OpenAI, Google AI Studio, xAI, NovitaAI, Hugging Face, and more); the full list is on [02 Installation and System Requirements · First launch: model configuration guide](02-Installation-and-System-Requirements.md#first-launch-model-configuration-guide);
 - **Model** — after picking a provider, choose one from its supported model list;
-- **API Key** — the key for that provider; its security boundary is below: [API Key security: not written to disk](#api-key-security-not-written-to-disk).
+- **API Key** — the key for that provider; its security boundary is below: [API Key security: encrypted local storage](#api-key-security-not-written-to-disk).
 
 After any change, run a **connection test** first to confirm the Key and the network both work, then let the team get going.
 
@@ -80,13 +80,19 @@ When is it worth it? Two most practical cases:
 
 > **Note**: per-member model binding only changes which model runs behind that member — it doesn't change the approval and acceptance flow. Assigning, verifying, and reporting work exactly as before (see [20 Guides · Assign and Accept](20-03-Assign-and-Accept.md)).
 
-## API Key security: not written to disk
+<a id="api-key-security-not-written-to-disk"></a>
+
+## API Key security: encrypted local storage
 
 - **Kept on this machine only** — the in-app note reads "used to call the selected model, kept on this machine only". Knowe only exchanges requests with the provider of the selected model and depends on no extra account or cloud service (see [02 Installation and System Requirements · System requirements](02-Installation-and-System-Requirements.md#system-requirements));
+- **Encrypted at rest by the OS** — settings keys use current-user Windows DPAPI. A DPAPI-protected digest also authenticates the complete settings projection, so offline changes to the provider URL or ciphertext are rejected. If neither the primary file nor encrypted backup validates, settings fail closed and the originals are not overwritten with empty defaults;
 - **Not written to browser storage** — the API Key is never stored in `localStorage`; your key isn't in the browser storage at all;
+- **Not passed to agent terminals** — model-authored shell/Python processes receive a minimal environment and do not inherit model keys, GitHub/npm tokens, or other host credentials;
 - **Clearable anytime** — you can clear the saved Key in Settings → Models and Providers;
 - **UI process isolation** — Knowe's UI process enables `contextIsolation` and the renderer has no Node capability, so the UI layer can't directly access system resources;
 - **Masked in the interface** — internal member ids and internal paths are always masked in the UI's natural language; screens involving a Key follow the same mask/leave-blank rule (see the screenshot guidelines on this page).
+
+> **Protection boundary**: DPAPI prevents a copied settings file from directly revealing the Key. It does not protect against malware already running as the same Windows user, nor erase historical files or system backups left by older versions. After a successful upgrade from a plaintext-storage release, rotate high-value keys at the provider.
 
 ## Common questions
 
@@ -100,7 +106,7 @@ No. The gate only appears on the very first launch; afterwards, change the provi
 By default, yes. You can bind individual members to independent models so specific members run on a different one.
 
 **Q: Where is the API Key stored? Could it be sent somewhere?**
-The Key is kept on this machine only and never written to browser storage, and you can clear it anytime in Settings. Knowe only exchanges requests with the provider of the selected model — no extra accounts or cloud services (see [02 Installation and System Requirements · System requirements](02-Installation-and-System-Requirements.md#system-requirements)).
+The Key stays on this machine as Windows DPAPI ciphertext, is never written to browser storage, and can be cleared anytime in Settings. Knowe only exchanges requests with the provider of the selected model — no extra accounts or cloud services (see [02 Installation and System Requirements · System requirements](02-Installation-and-System-Requirements.md#system-requirements)).
 
 **Q: What if the primary model is unavailable?**
 If a fallback model is configured, Knowe automatically falls back when the primary is unavailable. If not, first troubleshoot in Settings → Models and Providers (the three causes above: authentication failure / network unreachable / insufficient balance or rate limited); detailed steps are on [60 Troubleshooting · Model and Runtime Issues](60-02-Model-and-Runtime-Issues.md).

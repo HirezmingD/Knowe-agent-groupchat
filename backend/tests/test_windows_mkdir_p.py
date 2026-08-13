@@ -14,7 +14,7 @@ from backend.agent_runtime import normalize_command  # noqa: E402
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cmd 专属事故")
 def test_mkdir_p_no_longer_creates_dash_p(tmp_path) -> None:
-    r = asyncio.run(run_command("mkdir -p testdir/sub", cwd=tmp_path, timeout_s=15, max_output=10_000))
+    r = asyncio.run(run_command("mkdir -p testdir/sub", cwd=tmp_path, timeout_s=45, max_output=10_000))
     files = sorted(os.listdir(tmp_path))
     assert r.exit_code == 0
     assert "-p" not in files, f"-p 目录仍被建出: {files}"
@@ -23,7 +23,7 @@ def test_mkdir_p_no_longer_creates_dash_p(tmp_path) -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cmd 专属事故")
 def test_mkdir_p_multi_paths(tmp_path) -> None:
-    r = asyncio.run(run_command("mkdir -p one two", cwd=tmp_path, timeout_s=15, max_output=10_000))
+    r = asyncio.run(run_command("mkdir -p one two", cwd=tmp_path, timeout_s=45, max_output=10_000))
     files = sorted(os.listdir(tmp_path))
     assert r.exit_code == 0
     assert "-p" not in files and "one" in files and "two" in files

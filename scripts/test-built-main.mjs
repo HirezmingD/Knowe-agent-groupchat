@@ -1,7 +1,6 @@
 /** [v1.0.13][R5] Behavioral test for the generated out/main/index.js preview guard. */
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import vm from 'node:vm';
 
 const required = [
@@ -13,6 +12,8 @@ const required = [
 for (const url of required) assert.equal(existsSync(url), true, `required runtime source missing: ${url.pathname}`);
 
 const bundlePath = new URL('../out/main/index.js', import.meta.url);
+const mainPreloadPath = new URL('../out/preload/index.cjs', import.meta.url);
+const trayPreloadPath = new URL('../out/preload/trayCard.cjs', import.meta.url);
 let source;
 try {
   source = readFileSync(bundlePath, 'utf8');
@@ -49,68 +50,67 @@ function extractNamedFunction(name) {
   throw new Error(`unterminated function ${name}`);
 }
 
-/**
- * [阶段二 2.2 修复] 从 bundle 动态提取 preview 守卫所需的常量定义。
- * 背景：rollup 打包时会为跨 chunk 重名的 const 加 `$1` 后缀（如 HTTP_PORT → HTTP_PORT$1），
- * 函数体里引用的是重命名后的名字。测试脚本若硬编码 `const HTTP_PORT = '8081'`，
- * vm 里会 ReferenceError（被 parsePreviewUrl 的 catch 吞掉 → 恒返回 null）。
- * 修法：用正则提取 bundle 里真实的 `const X = ...;` 定义注入 vm，变量名永远跟产物走。
- * 注意：常量名要支持 `$1` 后缀（HTTP_PORT$1），且按 bundle 定义顺序注入
- * （CONTROL_HOST 依赖 HTTP_PORT$1，必须在其后）。
- */
-function extractConstDefs(source, names) {
-  const out = [];
-  for (const name of names) {
-    const re = new RegExp(`const ${name}(?:\\$\\d+)? = [^;]+;`);
-    const m = re.exec(source);
-    if (!m) throw new Error(`bundle 里找不到 const ${name} 的定义（preview 守卫结构变了？）`);
-    out.push(m[0]);
-  }
-  return out;
-}
-
-// vm 里注入 process 但清空 KNOWE_* 环境变量——bundle 里 HTTP_PORT$1 = String(process.env.KNOWE_HEALTH_PORT || "8081")，
-// 若继承宿主 shell 的污染值（如 18081）会导致端口失配、守卫恒 false。空 env → 回退默认 8081，与测试构造的 URL 一致。
-const context = vm.createContext({ URL, decodeURIComponent, createHash, process: { env: {} } });
+const context = vm.createContext({});
 const code = [
-  ...extractConstDefs(source, ['HTTP_PORT', 'CONTROL_HOST', 'PREVIEW_HOST_RE', 'TREE_PREFIX']),
-  extractNamedFunction('previewTokenForProject'),
-  extractNamedFunction('projectFromTreePath'),
-  extractNamedFunction('parsePreviewUrl'),
   extractNamedFunction('isAllowedPreviewFrameUrl'),
-  extractNamedFunction('isPreviewControlRequest'),
   'globalThis.__guard = isAllowedPreviewFrameUrl;',
-  'globalThis.__control = isPreviewControlRequest;',
-  'globalThis.__token = previewTokenForProject;',
 ].join('\n');
 vm.runInContext(code, context, { timeout: 1000, filename: 'built-preview-guard.vm.js' });
 const guard = context.__guard;
-const blocksControl = context.__control;
-const tokenFor = context.__token;
 assert.equal(typeof guard, 'function');
-assert.equal(typeof blocksControl, 'function');
-assert.equal(typeof tokenFor, 'function');
 
-const projectA = 'project_20260730203701';
-const projectB = 'project_20260730203702';
-const originA = `http://p-${tokenFor(projectA)}.preview.localhost:8081`;
-const originB = `http://p-${tokenFor(projectB)}.preview.localhost:8081`;
-const p1 = `${originA}/preview/tree/${projectA}/index.html`;
-const p1Child = `${originA}/assets/a.png`;
-const p2 = `${originB}/preview/tree/${projectB}/index.html`;
+const retiredTree = 'http://p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.preview.localhost:8081/preview/tree/project-a/index.html';
 for (const malformed of [undefined, null, 0, false, {}, [], '']) {
   assert.doesNotThrow(() => guard(malformed, undefined));
   assert.equal(guard(malformed, undefined), false, `must fail closed for ${String(malformed)}`);
 }
-assert.match(tokenFor(projectA), /^[0-9a-f]{32}$/);
+
+for (const preloadPath of [mainPreloadPath, trayPreloadPath]) {
+  assert.equal(
+    existsSync(preloadPath),
+    true,
+    `sandboxed preload must be emitted as CommonJS: ${preloadPath.pathname}`,
+  );
+  const preloadSource = readFileSync(preloadPath, 'utf8');
+  assert.match(preloadSource, /require\(["']electron["']\)/, 'preload must use Electron restricted require');
+  assert.doesNotMatch(
+    preloadSource,
+    /(?:require\s*\(|from\s+|import\s*\()["']\.{1,2}[\\/]/,
+    'sandboxed preload must be self-contained and must not load relative modules',
+  );
+  const requiredSpecifiers = Array.from(
+    preloadSource.matchAll(/require\s*\(\s*["']([^"']+)["']\s*\)/g),
+    (match) => match[1],
+  );
+  assert.deepEqual(
+    [...new Set(requiredSpecifiers)].sort(),
+    ['electron'],
+    'sandboxed preload may only require Electron from its restricted loader',
+  );
+}
+assert.deepEqual(
+  readdirSync(new URL('../out/preload/', import.meta.url)).sort(),
+  ['index.cjs', 'trayCard.cjs'],
+  'sandboxed preload output must contain only the two isolated entry files',
+);
+assert.equal(
+  existsSync(new URL('../out/preload/index.mjs', import.meta.url)),
+  false,
+  'sandboxed main preload must not regress to ESM',
+);
+assert.equal(
+  existsSync(new URL('../out/preload/trayCard.mjs', import.meta.url)),
+  false,
+  'sandboxed tray preload must not regress to ESM',
+);
 assert.equal(guard('about:blank', undefined), true);
 assert.equal(guard('about:srcdoc#fragment', null), true);
-assert.equal(guard(p1, 'about:blank'), true);
-assert.equal(guard(p1Child, p1), true);
-assert.equal(guard(p2, p1), false);
-assert.equal(guard(p1Child, 'about:srcdoc'), false);
-assert.equal(blocksControl('http://127.0.0.1:8081/settings', p1), true);
-assert.match(source, /p-\(\[0-9a-f\]\{32\}\)/, 'built preview host must use a 32-hex token');
+assert.equal(guard('about:srcdoc-escape', 'about:srcdoc'), false);
+assert.equal(guard('data:text/html,<img src=https://example.com>', 'about:srcdoc'), false);
+assert.equal(guard('blob:null/example', 'about:srcdoc'), false);
+assert.equal(guard(retiredTree, 'about:blank'), false);
+assert.equal(guard('http://127.0.0.1:8081/preview/tree/project-a/index.html', 'about:blank'), false);
+assert.equal(source.includes('previewTokenForProject'), false, 'built app must not retain the retired preview capability');
 
 assert.match(
   source,

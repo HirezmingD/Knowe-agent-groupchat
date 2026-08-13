@@ -12,6 +12,7 @@ test_zinnia.py — 知知（平台级接待）。
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import asyncio
@@ -37,6 +38,18 @@ from .test_deepseek import FakeDeepSeek, auto_approve, sse, tool_stream  # noqa:
 def reply_stream(text: str) -> bytes:
     """Current Zinnia protocol publishes user-visible text via a typed tool."""
     return tool_stream(PUBLIC_REPLY_TOOL, {"content": text})
+
+
+def _server_with_workspace(tmp_path: Path) -> tuple[KnoweServer, Path]:
+    """Provision mutually separated data, install and user-business roots."""
+
+    data_root = tmp_path / "data"
+    install_root = tmp_path / "install"
+    workspace = tmp_path / "workspace"
+    install_root.mkdir()
+    workspace.mkdir()
+    object.__setattr__(CONFIG, "install_root", str(install_root.resolve()))
+    return KnoweServer(data_dir=str(data_root)), workspace.resolve()
 
 
 @pytest.fixture(autouse=True)
@@ -322,13 +335,14 @@ async def test_platform_engine_starts_and_is_not_a_project(tmp_path):
 
 async def test_server_side_create_project_persists_and_broadcasts(tmp_path):
     """知知调工具 → 项目真的建出来、真的落盘、真的广播 project_created。"""
-    s = KnoweServer(data_dir=str(tmp_path))
+    s, workspace = _server_with_workspace(tmp_path)
     s.start_platform()
 
-    pid, name = await s._zinnia_create_project("官网改版")
+    pid, name = await s._zinnia_create_project("官网改版", str(workspace))
 
     assert s.hub.has(pid)
     assert pid in s.engines                                        # 引擎起来了
+    assert s.project_dirs[pid] == str(workspace)
     rows = s.store.load_projects()                                 # type: ignore[union-attr]
     assert [(r["project_id"], r["name"]) for r in rows] == [(pid, "官网改版")]
     assert name == "官网改版"
@@ -353,7 +367,7 @@ def test_clean_name_rules():
 
 async def test_card_approved_creates_the_project_with_the_cards_name(tmp_path):
     """★ 没人改名字 → 后端用卡上的原名兜底把项目建出来。"""
-    s = KnoweServer(data_dir=str(tmp_path))
+    s, workspace = _server_with_workspace(tmp_path)
     s.start_platform()
     eng = s.platform
     assert eng is not None
@@ -361,7 +375,7 @@ async def test_card_approved_creates_the_project_with_the_cards_name(tmp_path):
     # 手动挂一张建群卡（等价于知知调了工具）
     task = asyncio.create_task(eng.gate.propose(
         tool="create_project", agent_id=ZINNIA,
-        card_body={"project_name": "官网改版"}, timeout_s=3,
+        card_body={"project_name": "官网改版", "project_dir": str(workspace)}, timeout_s=3,
     ))
     await asyncio.sleep(0.02)
     card_id = eng.gate.pending_cards[0]["approval_id"]
@@ -373,6 +387,7 @@ async def test_card_approved_creates_the_project_with_the_cards_name(tmp_path):
     pid = s._project_id_for_approval(card_id)
     assert s.hub.has(pid)                                       # ★ 项目真的建出来了
     assert s.hub.projects[pid].name == "官网改版"
+    assert s.project_dirs[pid] == str(workspace)
     assert [r["name"] for r in s.store.load_projects()] == ["官网改版"]   # type: ignore[union-attr]
 
     for e in list(s.engines.values()):
@@ -381,21 +396,21 @@ async def test_card_approved_creates_the_project_with_the_cards_name(tmp_path):
 
 async def test_frontend_renamed_project_wins(tmp_path):
     """★ 用户在卡上改了名字 → 前端先发 create_project（同一个 id），后端不再重复建。"""
-    s = KnoweServer(data_dir=str(tmp_path))
+    s, workspace = _server_with_workspace(tmp_path)
     s.start_platform()
     eng = s.platform
     assert eng is not None
 
     task = asyncio.create_task(eng.gate.propose(
         tool="create_project", agent_id=ZINNIA,
-        card_body={"project_name": "知知提的名字"}, timeout_s=3,
+        card_body={"project_name": "知知提的名字", "project_dir": str(workspace)}, timeout_s=3,
     ))
     await asyncio.sleep(0.02)
     card_id = eng.gate.pending_cards[0]["approval_id"]
     pid = s._project_id_for_approval(card_id)
 
     # 前端用它改过的名字建（id 是从 card_id 确定性算出来的，两边算得一样）
-    await s.create_project(pid, "用户改的名字")
+    await s.create_project(pid, "用户改的名字", str(workspace))
     await s._maybe_create_from_card(eng, card_id)      # 后端兜底：发现已存在 → 什么都不做
     eng.resolve(card_id, "approved")
     await task
@@ -414,9 +429,9 @@ async def test_coordinator_speaks_first_in_a_new_project(tmp_path):
     # FakeAgent has no persisted model binding, so this Coordinator-only behavior test
     # deliberately disables the unrelated readiness barrier.
     with patch.dict(os.environ, {"MODEL_READINESS_GATE_V1": "0"}):
-        s = KnoweServer(data_dir=str(tmp_path))
+        s, workspace = _server_with_workspace(tmp_path)
         pid = s._allocate_canonical_project_id()
-        await s.create_project(pid, "官网改版")
+        await s.create_project(pid, "官网改版", str(workspace))
 
         eng = s.engines[pid]
         for _ in range(200):                      # 等引擎把 kickoff 那个回合跑起来
@@ -443,9 +458,9 @@ async def test_fake_mode_does_not_kickoff_by_default(tmp_path):
     assert CONFIG.agent == "fake"
     assert CONFIG.kickoff is False
 
-    s = KnoweServer(data_dir=str(tmp_path))
+    s, workspace = _server_with_workspace(tmp_path)
     pid = s._allocate_canonical_project_id()
-    await s.create_project(pid, "安静的项目")
+    await s.create_project(pid, "安静的项目", str(workspace))
     await asyncio.sleep(0.1)
 
     assert s.hub.projects[pid].seq == 0     # 一个字都没说
@@ -455,13 +470,13 @@ async def test_fake_mode_does_not_kickoff_by_default(tmp_path):
 async def test_existing_project_does_not_kickoff_twice(tmp_path):
     """重发 create_project（比如重连）不该让总管重复自我介绍。"""
     object.__setattr__(CONFIG, "kickoff", True)
-    s = KnoweServer(data_dir=str(tmp_path))
+    s, workspace = _server_with_workspace(tmp_path)
     pid = s._allocate_canonical_project_id()
-    await s.create_project(pid, "官网")
+    await s.create_project(pid, "官网", str(workspace))
     await asyncio.sleep(0.05)
     before = s.hub.projects[pid].seq
 
-    await s.create_project(pid, "官网")      # 再来一次
+    await s.create_project(pid, "官网", str(workspace))      # 再来一次
     await asyncio.sleep(0.05)
 
     assert s.hub.projects[pid].seq == before

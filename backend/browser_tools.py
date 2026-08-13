@@ -47,6 +47,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .agent_runtime import ToolError, clip
+from .network_policy import (
+    NetworkPolicyError,
+    PublicEgressProxy,
+    assert_public_http_url,
+    normalize_public_http_url,
+)
 
 log = logging.getLogger("knowe.browser")
 
@@ -348,7 +354,16 @@ async def _ensure_browser(*, headless: bool) -> Any:
             except Exception as exc:
                 raise _translate(exc, what="启动 Playwright") from None
 
-        launch_args = ["--disable-dev-shm-usage", "--no-sandbox"]
+        # Keep Chromium's own OS sandbox enabled.  Disabling it turns an untrusted
+        # webpage renderer exploit into direct access to the user's account.
+        launch_args = [
+            "--disable-dev-shm-usage",
+            # HTTP proxies do not carry QUIC or unrestricted WebRTC UDP.  Disable
+            # those alternate transports so a page cannot bypass the audited
+            # TCP egress path (or disclose local interfaces through ICE).
+            "--disable-quic",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ]
         try:
             _browser = await _pw.chromium.launch(headless=headless, args=launch_args)
         except Exception as primary_exc:
@@ -402,6 +417,10 @@ class BrowserPool:
         self.snapshot_max = snapshot_max
         self._sessions: dict[str, Session] = {}
         self._active_agents: set[str] = set()
+        # Every BrowserContext is forced through this loopback proxy.  The proxy
+        # resolves, authorizes, and then dials the exact numeric IP, eliminating
+        # the DNS validation/connection race.
+        self._egress_proxy = PublicEgressProxy(connect_timeout_s=timeout_s)
         _pools.add(self)
         _start_reaper()
 
@@ -425,11 +444,42 @@ class BrowserPool:
             )
         browser = await _ensure_browser(headless=self.headless)
         try:
+            await self._egress_proxy.start()
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 locale="zh-CN",
+                # Chromium normally bypasses proxies for loopback implicitly.
+                # `<-loopback>` removes that exception; the egress proxy then
+                # rejects explicit or rebound loopback destinations itself.
+                proxy={
+                    "server": self._egress_proxy.proxy_url,
+                    "bypass": "<-loopback>",
+                },
+                # Playwright routing cannot inspect requests already claimed by
+                # a Service Worker.  Blocking them keeps route syntax checks and
+                # the proxy as the only network paths available to page code.
+                service_workers="block",
             )
             context.set_default_timeout(self.timeout_ms)
+
+            async def guard_request(route: Any, request: Any) -> None:
+                request_url = str(getattr(request, "url", ""))
+                if request_url.startswith(("data:", "blob:", "about:blank")):
+                    await route.continue_()
+                    return
+                try:
+                    # This is a syntax/scheme guard only.  DNS authorization is
+                    # performed atomically with the actual socket connection in
+                    # PublicEgressProxy, so no route-time result is trusted later.
+                    normalize_public_http_url(request_url, default_https=False)
+                except NetworkPolicyError:
+                    await route.abort("blockedbyclient")
+                    return
+                await route.continue_()
+
+            # Validate top-level redirects and every subresource, not just the URL
+            # initially supplied by the model.
+            await context.route("**/*", guard_request)
             page = await context.new_page()
         except Exception as exc:
             raise _translate(exc, what="创建浏览器会话") from None
@@ -516,6 +566,7 @@ class BrowserPool:
         for agent_id in list(self._sessions):
             await self.close_session(agent_id)
         _pools.discard(self)
+        await self._egress_proxy.aclose()
         await _maybe_release_browser()
 
 
@@ -574,20 +625,27 @@ def check_url(url: Any) -> str:
     整个 resolve_in_sandbox 就白守了。`javascript:` 同理（在当前页注入脚本）。
     所以：**认得出的 scheme 只放 http/https**，认不出 scheme 的当域名补 https。
     """
-    if not isinstance(url, str) or not url.strip():
-        raise ToolError("url 不能为空")
-    u = url.strip()
-    low = u.lower()
-    if low == "about:blank":
+    if isinstance(url, str) and url.strip().lower() == "about:blank":
         return "about:blank"
-    if _SCHEME_RX.match(u):
-        if not low.startswith(("http://", "https://")):
-            raise ToolError(
-                f"只允许 http/https 地址：{url}。"
-                "本地文件请用 safe_read_file，不要让浏览器去读文件系统。"
-            )
-        return u
-    return "https://" + u                          # 模型常直接给 example.com
+    try:
+        return normalize_public_http_url(url)
+    except NetworkPolicyError as exc:
+        raise ToolError(
+            f"浏览器地址被安全策略拒绝：{exc}。"
+            "本地文件请用 safe_read_file；本机和局域网服务默认不向 Agent 开放。"
+        ) from None
+
+
+async def validate_url(url: Any) -> str:
+    """Validate syntax plus DNS before top-level navigation."""
+
+    normalized = check_url(url)
+    if normalized == "about:blank":
+        return normalized
+    try:
+        return await assert_public_http_url(normalized)
+    except NetworkPolicyError as exc:
+        raise ToolError(f"浏览器地址被安全策略拒绝：{exc}") from None
 
 
 async def snapshot(
@@ -716,4 +774,5 @@ __all__ = [
     "get_images",
     "locator",
     "snapshot",
+    "validate_url",
 ]

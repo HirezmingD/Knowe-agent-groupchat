@@ -659,6 +659,7 @@ function eventSeq(ev: InboundEvent): number | undefined {
 }
 
 type ActivityLike = {
+  type?: unknown;
   scope_id?: unknown;
   task_id?: unknown;
   attempt_id?: unknown;

@@ -77,11 +77,11 @@ function mentionFragmentAt(value: string, cursor: number): MentionFragment | nul
   const start = before.lastIndexOf('@');
   if (start < 0) return null;
   const prev = start > 0 ? before[start - 1] : '';
-  if (/[A-Za-z0-9._%+-]/.test(prev)) return null; // foo@bar.com
+  if (prev && /[A-Za-z0-9._%+-]/.test(prev)) return null; // foo@bar.com
 
   const query = before.slice(start + 1);
   // 打了空格/换行/标点，说明提及已经结束；显示名带空格仍可通过按钮列表插入。
-  if (/[\s，。！？、,;；:：()（）\[\]{}]/.test(query) || query.length > 32) return null;
+  if (/[\s，。！？、,;；:：()（）[\]{}]/.test(query) || query.length > 32) return null;
   return { start, end: cursor, query };
 }
 

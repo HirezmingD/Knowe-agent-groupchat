@@ -16,7 +16,9 @@ from pathlib import Path
 import pytest
 
 import backend.engine as E
+from backend import runtime_settings
 from backend.engine import ProjectEngine
+from backend.i18n_backend import msg
 
 
 class FakeHub:
@@ -148,15 +150,18 @@ def test_two_agents_have_independent_buffers() -> None:
     assert deltas(engine, "be_1") == ["后端完成"]
 
 
-def test_dispatch_result_uses_card_as_the_visible_message() -> None:
+def test_dispatch_result_uses_card_as_the_visible_message(monkeypatch) -> None:
     from backend import tools_knowe
 
+    monkeypatch.setattr(runtime_settings, "language", lambda: "zh")
     source = Path(tools_knowe.__file__).read_text("utf-8")
     block = source.rsplit('engine.record_committed_action("propose_next")', 1)[1][:12000]
     message_block = block.split("message=(", 1)[1].split(").replace", 1)[0]
-    assert "卡把话说完了" in message_block
-    assert "NOTHING_TO_ADD" in message_block
-    assert "谁去做、做什么" not in message_block
+    assert 'msg("tools_knowe.py.279")' in message_block
+    localized = "".join(msg(f"tools_knowe.py.{key}") for key in (334, 278, 279, 280, 281, 282, 283, 284))
+    assert "卡把话说完了" in localized
+    assert "NOTHING_TO_ADD" in localized
+    assert "谁去做、做什么" not in localized
     assert 'message=f"任务已派给' not in source
 
 

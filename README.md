@@ -37,7 +37,7 @@ No prompt engineering, no task breakdowns to write. The Coordinator automaticall
 ## And more
 
 - **Memory & knowledge base**: friendly chat history, favorites, and knowledge base — forward messages across groups, share experience within a project.
-- **Safety boundary**: agents only operate inside their project directory — your other files are never touched.
+- **Safety boundary**: agent file tools are workspace-scoped, and model-authored processes run in an OS sandbox with no network. If isolation is unavailable, terminal execution fails closed; only files you explicitly approve can cross the workspace boundary.
 
 ---
 

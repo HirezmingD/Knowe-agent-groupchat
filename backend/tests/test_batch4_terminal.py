@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.agent_runtime import ToolError                     # noqa: E402
 from backend.terminal_tools import (                            # noqa: E402
-    ProcessPool, _RingLog, guard_command, python_for, run_command, run_python,
+    ProcessPool, _DrainCapture, _RingLog, _mxc_reported_timeout,
+    _windows_cmd_compatibility_note,
+    guard_command, python_for, run_command, run_python,
 )
 
 _WIN = sys.platform.startswith("win")
@@ -45,9 +47,12 @@ def test_stderr_is_merged_into_output(tmp_path: Path) -> None:
 
 def test_cwd_is_the_project_dir(tmp_path: Path) -> None:
     (tmp_path / "marker.txt").write_text("x", "utf-8")
-    cmd = "dir /b" if _WIN else "ls"
+    # Full Windows UI lockdown disables Win32k calls; cmd's ``dir`` formatter
+    # uses that surface and legitimately fails. ``type`` proves the same cwd
+    # and project read boundary without relaxing ui.disable.
+    cmd = "type marker.txt" if _WIN else "ls"
     r = asyncio.run(run_command(cmd, cwd=tmp_path, timeout_s=30, max_output=10_000))
-    assert "marker.txt" in r.output
+    assert ("x" if _WIN else "marker.txt") in r.output
 
 
 @pytest.mark.skipif(_WIN, reason="sleep 语义不同")
@@ -177,6 +182,32 @@ def test_execute_code_leaves_no_junk_in_the_project(tmp_path: Path) -> None:
     assert names == ["made.txt"]          # 只有脚本自己写的那个，没有脚本本身
 
 
+def test_execute_code_preserves_preexisting_runtime_parents(tmp_path: Path) -> None:
+    """Cleanup owns its directories, never a pre-existing user directory."""
+
+    user_knowe = tmp_path / ".knowe"
+    user_sandbox = tmp_path / ".knowe-sandbox"
+    user_knowe.mkdir()
+    user_sandbox.mkdir()
+    (user_knowe / "user-note.txt").write_text("keep", "utf-8")
+
+    asyncio.run(
+        run_python(
+            "open('made.txt','w').write('ok')",
+            cwd=tmp_path,
+            timeout_s=30,
+            max_output=10_000,
+        )
+    )
+
+    assert (user_knowe / "user-note.txt").read_text("utf-8") == "keep"
+    assert user_sandbox.is_dir()
+    assert not (user_knowe / "sandbox-home").exists()
+    assert not (user_knowe / "sandbox-temp").exists()
+    assert not (user_sandbox / "commands").exists()
+    assert not (user_sandbox / "execute").exists()
+
+
 def test_execute_code_can_import_project_modules(tmp_path: Path) -> None:
     (tmp_path / "mymod.py").write_text("VALUE = 'from-project'\n", "utf-8")
     r, _ = asyncio.run(run_python("import mymod; print(mymod.VALUE)", cwd=tmp_path,
@@ -198,13 +229,34 @@ def test_execute_code_timeout(tmp_path: Path) -> None:
     assert r.timed_out is True
 
 
+def test_mxc_empty_ffffffff_is_normalized_to_timeout() -> None:
+    empty = _DrainCapture(prefix=b"", tail=b"", bytes_total=0, sha256="")
+    assert _mxc_reported_timeout(empty, returncode=0xFFFFFFFF, timeout_s=1)
+    assert _mxc_reported_timeout(empty, returncode=-1, timeout_s=1)
+    assert _mxc_reported_timeout(empty, returncode=124, timeout_s=1)
+    assert not _mxc_reported_timeout(empty, returncode=0xFFFFFFFF, timeout_s=0)
+
+
+def test_windows_dir_denial_has_actionable_compatibility_note() -> None:
+    noted = _windows_cmd_compatibility_note("dir /b", "Access is denied.\r\n", 1)
+    if _WIN:
+        assert "Python os.listdir" in noted
+    else:
+        assert noted == "Access is denied.\r\n"
+
+
 def test_prefers_project_venv(tmp_path: Path) -> None:
     """
     ★ Worker `pip install pandas` 装进项目 venv，转头 execute_code 里
       import pandas 报 ModuleNotFoundError —— 它会以为自己装错了，然后再装一遍。
     """
     exe, why = python_for(tmp_path)
-    assert exe == sys.executable and "没找到虚拟环境" in why
+    expected = (
+        sys.executable
+        if getattr(sys, "frozen", False)
+        else str(getattr(sys, "_base_executable", sys.executable))
+    )
+    assert exe == expected and "没找到虚拟环境" in why
 
     if _WIN:
         pytest.skip("POSIX 布局")
@@ -217,17 +269,49 @@ def test_prefers_project_venv(tmp_path: Path) -> None:
     assert exe2 == str(fake) and "虚拟环境" in why2
 
 
+def test_packaged_backend_execute_mode_routes_project_script(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Smoke the narrow entry PyInstaller exposes to execute_code."""
+
+    from backend import run_backend
+
+    script = tmp_path / "packaged-entry-smoke.py"
+    script.write_text("print('packaged-entry-ok')\n", "utf-8")
+    monkeypatch.setenv("KNOWE_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["KnoweBackend.exe", "--knowe-sandbox-execute", str(script)],
+    )
+    assert run_backend._sandbox_execute_mode() is True
+    assert "packaged-entry-ok" in capsys.readouterr().out
+
+
 # ═══════════════════════════════ 后台进程 ═══════════════════════════
 
 def test_process_lifecycle(tmp_path: Path) -> None:
     async def go() -> None:
         pool = ProcessPool("p1", max_procs=4, log_bytes=100_000)
         try:
-            cmd = "for i in 1 2 3 4 5 6 7 8 9; do echo tick-$i; sleep 0.4; done"
+            cmd = (
+                "for /L %%i in (1,1,9) do @(echo tick-%%i&choice /T 1 /D Y >nul)"
+                if _WIN
+                else "for i in 1 2 3 4 5 6 7 8 9; do echo tick-$i; sleep 0.4; done"
+            )
             bp = await pool.start(cmd, agent_id="be_1", cwd=tmp_path)
             assert bp.session_id == "proc_1"
 
-            await asyncio.sleep(1.0)
+            # Tier-3 AppContainer setup must establish and journal DACL grants before
+            # the contained command starts.  On a cold Windows runner that can take
+            # several seconds, so assert streamed output with a bounded poll instead
+            # of assuming host-shell startup latency.
+            for _ in range(80):
+                if "tick-1" in bp.log.read():
+                    break
+                await asyncio.sleep(0.25)
             assert bp.running is True
             assert "tick-1" in bp.log.read()
 
@@ -250,7 +334,9 @@ def test_process_wait_returns_when_it_exits(tmp_path: Path) -> None:
         pool = ProcessPool("p2", max_procs=4, log_bytes=100_000)
         try:
             bp = await pool.start("echo done-now", agent_id="be_1", cwd=tmp_path)
-            assert await pool.wait(bp, 15) is True
+            # Tier-3 cold starts apply and later restore DACL grants before the
+            # supervisor exits; allow that security lifecycle to complete.
+            assert await pool.wait(bp, 45) is True
             assert bp.exit_code == 0
             assert "done-now" in bp.log.read()
         finally:
@@ -264,12 +350,19 @@ def test_process_submit_feeds_stdin(tmp_path: Path) -> None:
         pool = ProcessPool("p3", max_procs=4, log_bytes=100_000)
         try:
             bp = await pool.start(
-                f"{sys.executable} -c \"import sys;[print('got:'+l.strip(),flush=True) for l in sys.stdin]\"",
+                ("findstr /R .*" if _WIN else
+                 f"{sys.executable} -c \"import sys;[print('got:'+l.strip(),flush=True) for l in sys.stdin]\""),
                 agent_id="qa_1", cwd=tmp_path)
-            await asyncio.sleep(0.5)
-            await pool.submit(bp, "hello")
-            await asyncio.sleep(0.6)
-            assert "got:hello" in bp.log.read()
+            if _WIN:
+                with pytest.raises(ToolError, match="stdin.*fail-closed"):
+                    await pool.submit(bp, "hello")
+            else:
+                await pool.submit(bp, "hello")
+                for _ in range(40):
+                    if "got:hello" in bp.log.read():
+                        break
+                    await asyncio.sleep(0.1)
+                assert "got:hello" in bp.log.read()
         finally:
             await pool.aclose(immediate=True)
 
@@ -292,11 +385,12 @@ def test_process_unknown_session_says_what_exists(tmp_path: Path) -> None:
 def test_process_cap(tmp_path: Path) -> None:
     async def go() -> None:
         pool = ProcessPool("p5", max_procs=2, log_bytes=10_000)
+        long_command = "choice /T 30 /D Y >nul" if _WIN else "sleep 20"
         try:
-            await pool.start("sleep 20", agent_id="a", cwd=tmp_path)
-            await pool.start("sleep 20", agent_id="a", cwd=tmp_path)
+            await pool.start(long_command, agent_id="a", cwd=tmp_path)
+            await pool.start(long_command, agent_id="a", cwd=tmp_path)
             with pytest.raises(ToolError) as e:
-                await pool.start("sleep 20", agent_id="a", cwd=tmp_path)
+                await pool.start(long_command, agent_id="a", cwd=tmp_path)
             assert "上限" in str(e.value)
         finally:
             await pool.aclose(immediate=True)

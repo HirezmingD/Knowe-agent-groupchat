@@ -6,9 +6,12 @@ import inspect
 from types import SimpleNamespace
 
 from backend import contract, runtime_settings, tool_ledger
-from backend.engine import ACTION_CONTRACT, ProjectEngine
+from backend.engine import ProjectEngine, _engine_block
 from backend.runtime import WORKER_TOOL_NAMES
 from backend.worker_gateway_runtime import _inject_user_address_prompt
+
+
+ACTION_CONTRACT = _engine_block("ACTION_CONTRACT", lang="zh")
 
 
 EXPECTED_FIXED_19 = (
@@ -163,7 +166,7 @@ def test_coordinator_rename_counter_is_strong_and_one_shot(monkeypatch) -> None:
 def test_coordinator_address_block_sits_immediately_before_action_contract() -> None:
     source = inspect.getsource(ProjectEngine._run_agent_turn)
     address = '+ (("\\n\\n" + user_address_block) if user_address_block else "")'
-    action = '+ "\\n\\n" + ACTION_CONTRACT'
+    action = '+ "\\n\\n" + _engine_block("ACTION_CONTRACT")'
     assert address in source
     assert action in source
     assert source.index(address) < source.index(action)

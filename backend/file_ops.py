@@ -26,6 +26,7 @@ import fnmatch
 import json
 import os
 import re
+import stat
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +59,22 @@ DEFAULT_SKIP_DIRS: frozenset[str] = frozenset({
 #: scanning.
 _MAX_LINE_CHARS = 400
 _BINARY_PROBE = 8192
+
+
+def _is_filesystem_alias(path: Path) -> bool:
+    """Hard links and reparse points are outside the broker's trust model."""
+
+    try:
+        info = path.lstat()
+    except OSError:
+        return True
+    attributes = int(getattr(info, "st_file_attributes", 0) or 0)
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(
+        stat.S_ISLNK(info.st_mode)
+        or attributes & reparse_flag
+        or (stat.S_ISREG(info.st_mode) and int(getattr(info, "st_nlink", 1)) > 1)
+    )
 
 
 @dataclass
@@ -192,6 +209,7 @@ def search_files(
             d for d in dirnames
             if not (here == root and d in reserved_root_dirs)
             and (include_ignored or (d not in DEFAULT_SKIP_DIRS and not d.startswith(".")))
+            and not _is_filesystem_alias(here / d)
         ]
         dirnames.sort()
 
@@ -212,10 +230,8 @@ def search_files(
                 continue
 
             try:
-                if fpath.is_symlink():
-                    resolved = fpath.resolve()
-                    if not (resolved == root or root in resolved.parents):
-                        continue
+                if _is_filesystem_alias(fpath):
+                    continue
                 if not fpath.is_file():
                     continue
                 byte_size = fpath.stat().st_size

@@ -60,7 +60,7 @@ describe('ApprovalCard · 团队卡', () => {
     fireEvent.click(screen.getByText('确认'));
 
     expect(spy.approved).toEqual([{ id: 'ap1', projectId: 'p1' }]);
-    expect(screen.getByText('已提交…').hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('已提交').hasAttribute('disabled')).toBe(true);
     expect((screen.getByText('拒绝') as HTMLButtonElement).disabled).toBe(true);
     // ★ 首个解决为准：卡片仍是未决态，等服务端 approval_resolved
     expect(container.querySelector('.approval.settled')).toBeNull();
@@ -120,7 +120,7 @@ describe('ApprovalCard · 任务卡', () => {
 describe('RosterPanel', () => {
   it('open=false → 面板不带 .open（收起）', () => {
     useKnoweStore.setState({
-      convs: { p1: { projectId: 'p1', items: [], members: [member('fe_1', '小前')], banner: null, draft: '' } },
+      convs: { p1: { projectId: 'p1', items: [], members: [member('fe_1', '小前')], banner: null, draft: '', unread: 0 } },
       activeProjectId: 'p1',
     });
     const { container } = render(<RosterPanel open={false} onClose={() => {}} />);
@@ -132,7 +132,7 @@ describe('RosterPanel', () => {
       convs: {
         p1: {
           projectId: 'p1', items: [], banner: null,
-      draft: '',
+          draft: '', unread: 0,
           members: [member('fe_1', '小前', '前端', 'busy'), member('be_1', '小后', '后端', 'idle')],
         },
       },

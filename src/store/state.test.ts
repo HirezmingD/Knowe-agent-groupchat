@@ -14,7 +14,7 @@ import {
 import type { InboundEvent } from '../contract/envelope';
 
 function conv(projectId = 'p1'): Conv {
-  return { projectId, projectName: projectId, items: [], members: [], banner: null, draft: '' };
+  return { projectId, projectName: projectId, items: [], members: [], banner: null, draft: '', unread: 0 };
 }
 
 function apply(c: Conv, ev: unknown): void {

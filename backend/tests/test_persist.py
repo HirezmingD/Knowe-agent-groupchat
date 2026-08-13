@@ -152,6 +152,9 @@ async def test_hub_emit_writes_through_to_disk(tmp_path: Path):
 
     await hub.emit("p1", {"type": "message", "agent_id": "a", "content": "落盘"})
 
+    # emit() commits to the FIFO persistence queue without blocking the event
+    # loop on disk I/O.  Readers that need a durable boundary must flush first.
+    assert store.flush()
     events = store.load_events("p1", limit=10)
     assert len(events) == 1
     assert events[0]["content"] == "落盘"

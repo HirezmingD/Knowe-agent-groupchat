@@ -138,7 +138,7 @@ export function appendToolActivity(
     ));
 
     if (pendingIdx >= 0) {
-      const pending = list[pendingIdx];
+      const pending = list[pendingIdx]!;
       let concreteIdx = pendingIdx;
       if (pending.n > 1) {
         pending.n -= 1;
@@ -148,7 +148,7 @@ export function appendToolActivity(
         pending.pendingDetail = false;
       }
 
-      const line = list[concreteIdx];
+      const line = list[concreteIdx]!;
       const prev = list[concreteIdx - 1];
       if (prev && !prev.pendingDetail && prev.tool === line.tool) {
         prev.n += line.n;

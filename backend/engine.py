@@ -121,39 +121,14 @@ def _unique_strings(value: Any) -> tuple[str, ...]:
 
 
 def _auto_external_roots(objective: str) -> tuple[str, ...]:
-    r"""[v1.0.23.8-A] 从任务目标文本提取 Windows 绝对路径，返回其根目录。
+    """Deprecated fail-closed compatibility hook.
 
-    coordinator 在 goal 里写「用 copy_external_file 复制 D:/a/b/c.md」时，
-    引擎自动把 D:/a/b 加入 authorized_external_roots，让外部复制工具可用。
-
-    规则（最小权限）：
-      - 只认盘符绝对路径（如 D:/xxx 或 D:/xxx/file.md）
-      - 文件路径取其所在目录；目录路径取其自身
-      - 根目录自身（如 D:/）不授权（太宽）
-      - 项目工作区内部路径不授权（本来就能用项目工具）
+    Text produced by a model is not user authorization.  External roots must arrive
+    as structured metadata tied to a real approval record.
     """
-    if not objective:
-        return ()
-    # 归一化反斜杠（JSON 转义的双反斜杠 → 单反斜杠）
-    text = objective.replace("\\\\", "\\")
-    pattern = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]:[\\/][^\s\"'`|<>]+)", re.IGNORECASE)
-    roots: list[str] = []
-    for match in pattern.finditer(text):
-        raw = match.group(1).strip().rstrip(".,;:)]}")
-        if not raw or len(raw) < 4:
-            continue
-        path = Path(raw)
-        if not path.is_absolute():
-            continue
-        candidate: Path
-        if path.suffix:
-            candidate = path.parent  # 文件 → 所在目录
-        else:
-            candidate = path  # 目录 → 自身
-        if candidate == candidate.anchor:
-            continue  # 盘符根太宽，不授权
-        roots.append(str(candidate))
-    return _unique_strings(roots)
+
+    del objective
+    return ()
 
 
 def _normalize_project_path(value: Any) -> str:
@@ -848,10 +823,10 @@ _SOULS = Path(__file__).parent / "souls"
 _ENGINE_BLOCKS_CACHE: dict[str, dict[str, str]] = {}
 
 
-def _engine_block(name: str) -> str:
-    """按当前语言取上下文块；缺失返回空串。"""
+def _engine_block(name: str, *, lang: str | None = None) -> str:
+    """按当前语言取上下文块；测试/工具可显式指定语言；缺失返回空串。"""
     from . import runtime_settings as _rs
-    lang = _rs.language() or "zh"
+    lang = lang or _rs.language() or "zh"
     lang = lang if lang in ("zh", "en") else "zh"
     if lang not in _ENGINE_BLOCKS_CACHE:
         blocks: dict[str, list[str]] = {}
@@ -8735,15 +8710,10 @@ class ProjectEngine:
             extension_metadata.pop("external_roots", ()),
         )
         authorized_external_roots = _unique_strings(roots_value)
-        # [v1.0.23.8-A] 显式授权为空时：从 goal/objective 文本自动提取外部
-        #   绝对路径（如 D:\xxx\file.md），取其根目录加入授权——coordinator
-        #   派活时无需显式声明 external roots，copy_external_file 不再被
-        #   「no external root is authorized」拦截。仅当显式为空时才自动补，
-        #   显式授权永远优先（最小权限原则）。
-        if not authorized_external_roots:
-            auto_roots = _auto_external_roots(objective_text)
-            if auto_roots:
-                authorized_external_roots = _unique_strings(auto_roots)
+        # A model-authored objective is never an authority source.  Even structured
+        # roots are usable only when this task is tied to a recorded user approval.
+        if authorized_external_roots and not authorization_ref:
+            authorized_external_roots = ()
 
         metadata = {
             "engine_boundary": "ProjectEngine",

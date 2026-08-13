@@ -61,7 +61,9 @@ def test_bare_domain_gets_https() -> None:
 
 
 def test_http_and_https_pass_through() -> None:
-    assert browser_tools.check_url("http://localhost:3000/x") == "http://localhost:3000/x"
+    with pytest.raises(ToolError):
+        browser_tools.check_url("http://localhost:3000/x")
+    assert browser_tools.check_url("http://example.com:3000/x") == "http://example.com:3000/x"
     assert browser_tools.check_url(" https://a.com/b?c=1 ") == "https://a.com/b?c=1"
 
 

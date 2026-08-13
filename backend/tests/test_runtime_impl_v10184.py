@@ -298,9 +298,26 @@ async def test_websocket_rejects_before_hub_and_accepts_shared_token(tmp_path: P
         assert rejected.value.response.status_code == 401
         assert server.hub.client_count == 0
 
+        with pytest.raises(InvalidStatus) as wrong_query:
+            async with websockets.connect(f"{uri}/?token={'0' * 64}"):
+                pass
+        assert wrong_query.value.response.status_code == 401
+        assert server.hub.client_count == 0
+
         async with websockets.connect(
             uri, additional_headers={TOKEN_HEADER: CONFIG.runtime_token},
         ):
+            await asyncio.sleep(0)
+            assert server.hub.client_count == 1
+        for _ in range(20):
+            if server.hub.client_count == 0:
+                break
+            await asyncio.sleep(0.01)
+        assert server.hub.client_count == 0
+
+        # Electron's normal path uses a query bearer because Chromium doesn't
+        # reliably allow custom WebSocket headers from the renderer.
+        async with websockets.connect(f"{uri}/?token={CONFIG.runtime_token}"):
             await asyncio.sleep(0)
             assert server.hub.client_count == 1
         for _ in range(20):
@@ -322,7 +339,7 @@ async def test_closing_fence_blocks_engine_creation_without_creating_files(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_generic_external_read_rejects_complete_backend_data_root(tmp_path: Path) -> None:
+async def test_coordinator_has_no_generic_external_read_capability(tmp_path: Path) -> None:
     data_root = tmp_path / "data" / "backend"
     workspace = tmp_path / "workspaces" / "demo"
     workspace.mkdir(parents=True)
@@ -337,11 +354,9 @@ async def test_generic_external_read_rejects_complete_backend_data_root(tmp_path
     )
     try:
         registry = build_coordinator_registry(engine)
-        raw = await registry.execute("read_external_file", {"path": str(secret)})
-        result = json.loads(raw)
-        assert result["status"] == "error"
-        assert "内部工作区" in result["message"]
-        assert "internal" not in result.get("content", "")
+        assert "read_external_file" not in registry.names()
+        assert "list_external_dir" not in registry.names()
+        assert str(secret) not in json.dumps(registry.get_schemas(), ensure_ascii=False)
     finally:
         await engine.stop(immediate=True)
 

@@ -137,13 +137,13 @@ const FullCard: React.FC<{ projectId: string; entry: DirectoryEntry }> = ({ proj
       if (bar) bar.style.transform = `scaleX(${Math.max(0, Math.min(100, (left / total) * 100)) / 100})`;
       if (left <= 0 && !firedRef.current) {
         firedRef.current = true;
-        clearInterval(t);
+        clearInterval(timer);
         // 超时 = 回退到暂缓态：回传取消并收起（红字留着，不循环弹）。
         cancel(projectId);
       }
     };
-    tick();
     const timer = setInterval(tick, 1000);
+    tick();
     return () => clearInterval(timer);
   }, [projectId, openUntil, active]);
 

@@ -79,40 +79,39 @@ describe('MessageBubble · 用户消息三态', () => {
 
 // ═══════════════════════════════════════════════════════════════
 describe('StreamBubble · 流式', () => {
-  it('流式中 → 有三点输入反馈，但不逐字渲染增量正文', () => {
+  it('流式中 → 有统一 ThinkingDot 反馈，但不逐字渲染增量正文', () => {
     const { container } = render(<StreamBubble text="正在思" />);
-    expect(container.querySelectorAll('.bubble.agent .typing-dots i')).toHaveLength(3);
-    expect(screen.getByText('正在输入…')).toBeTruthy();
+    expect(container.querySelector('.bubble.agent .thinking-dot')).toBeTruthy();
     expect(screen.queryByText('正在思')).toBeNull();
   });
 
   it('text 为空也渲染——第一个 delta 未到时的样子', () => {
     const { container } = render(<StreamBubble text="" />);
-    expect(container.querySelectorAll('.typing-dots i')).toHaveLength(3);
+    expect(container.querySelector('.thinking-dot')).toBeTruthy();
   });
 
   it('[v1.0.23.3] 推理面板：流式中实时展示推理段落，默认展开可折叠', () => {
     const { container } = render(
       <StreamBubble reasoning={'先分析问题\n再看数据'} />,
     );
-    expect(screen.getByText('AI 推理记录')).toBeTruthy();
+    expect(screen.getByLabelText('AI 推理中...')).toBeTruthy();
     expect(screen.getByText('先分析问题')).toBeTruthy();
-    expect(screen.getByText('再看数据')).toBeTruthy();
+    expect(screen.queryByText('再看数据')).toBeNull(); // 最后一段仍在累积，下一段到达才显示
     const trigger = container.querySelector('.reasoning-trigger') as HTMLButtonElement | null;
     expect(trigger).toBeTruthy();
     expect(trigger?.getAttribute('aria-expanded')).toBe('true');
     expect(container.querySelector('.reasoning-scroll p')).toBeTruthy();
   });
 
-  it('终态先到、首帧未确认时只画通用输入反馈，不抢先露出推理', () => {
+  it('终态先到、首帧未确认时仍保持已到达的推理，不闪回通用反馈', () => {
     render(
       <StreamBubble
         settling
-        reasoning="不该露出的推理"
+        reasoning={'已经到达的推理\n仍在追加'}
       />,
     );
-    expect(screen.getByText('正在输入')).toBeTruthy();
-    expect(screen.queryByText('AI 推理记录')).toBeNull();
+    expect(screen.getByLabelText('AI 推理中...')).toBeTruthy();
+    expect(screen.getByText('已经到达的推理')).toBeTruthy();
   });
 });
 
@@ -229,7 +228,7 @@ describe('ChatStream · 消息流分发', () => {
     expect(container.querySelector('.bubble.agent')).toBeNull();
   });
 
-  it('★ 流式中有三点反馈；收尾后三点消失（定格）', () => {
+  it('★ 流式中有 ThinkingDot；收尾后反馈消失（定格）', () => {
     seedConv('p1', {
       items: [{ kind: 'agent', agentId: 'fe_1', text: '正在', streaming: true }],
       members: [member('fe_1', '小前')],
@@ -237,7 +236,7 @@ describe('ChatStream · 消息流分发', () => {
     activate('p1');
 
     const { container, rerender } = render(stream());
-    expect(container.querySelectorAll('.typing-dots i')).toHaveLength(3);
+    expect(container.querySelector('.thinking-dot')).toBeTruthy();
 
     // message 收尾（applyEvent 会把 streaming 置 false）
     act(() => {
@@ -253,7 +252,7 @@ describe('ChatStream · 消息流分发', () => {
     });
     rerender(stream());
 
-    expect(container.querySelector('.typing-dots')).toBeNull();
+    expect(container.querySelector('.thinking-dot')).toBeNull();
     expect(container.querySelector('.bubble.agent')?.textContent).toBe('正在写');
   });
 
@@ -280,7 +279,7 @@ describe('ChatStream · 消息流分发', () => {
 
 // ═══════════════════════════════════════════════════════════════
 describe('Composer', () => {
-  it('输入 + Enter → store.sendMessage（乐观气泡当场出现）', () => {
+  it('输入 + Ctrl+Enter → store.sendMessage（乐观气泡当场出现）', () => {
     const spy = installSocketSpy();
     seedConv('p1');
     activate('p1');
@@ -288,7 +287,7 @@ describe('Composer', () => {
     render(<Composer />);
     const ta = screen.getByLabelText('消息输入框');
     fireEvent.change(ta, { target: { value: '你好' } });
-    fireEvent.keyDown(ta, { key: 'Enter' });
+    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true });
 
     expect(spy.sent).toEqual([{ content: '你好', projectId: 'p1' }]);
 
@@ -330,7 +329,7 @@ describe('Composer', () => {
     expect(ta).toBeTruthy();                       // 输入框没消失（v0.2 事故的专属回归）
 
     fireEvent.change(ta, { target: { value: '断线也要发' } });
-    fireEvent.keyDown(ta, { key: 'Enter' });
+    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true });
     expect(spy.sent.length).toBe(1);               // 交给 transport 响亮失败 + 回声哨兵
   });
 });

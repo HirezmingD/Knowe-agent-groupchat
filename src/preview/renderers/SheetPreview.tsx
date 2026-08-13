@@ -1,4 +1,4 @@
-/** XLSX/XLS 只读工作簿预览；动态加载 SheetJS，并限制 DOM 规模。 */
+/** XLSX 只读工作簿预览；动态加载维护中的 OOXML 解析器，并限制 DOM 规模。 */
 
 import React, { useMemo, useState } from 'react';
 import type { PreviewFilePayload } from '../../shared/bridge';
@@ -20,28 +20,26 @@ interface WorkbookModel {
   sheets: SheetData[];
 }
 
+function displayCell(value: unknown): string {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toLocaleString();
+  return String(value);
+}
+
 async function loadWorkbook(
   projectId: string,
   file: PreviewFilePayload,
 ): Promise<WorkbookModel> {
   const buffer = await fetchPreviewArrayBuffer(projectId, file);
-  const module = await import('xlsx');
-  const workbook = module.read(buffer, { type: 'array' });
-  const sheets = workbook.SheetNames.map((name) => {
-    const worksheet = workbook.Sheets[name];
-    if (!worksheet) {
-      return { name, rows: [], truncatedRows: false, truncatedCols: false };
-    }
-    const rawRows = module.utils.sheet_to_json<unknown[]>(worksheet, {
-      header: 1,
-      defval: '',
-      blankrows: false,
-      raw: false,
-    });
+  // The universal entry accepts ArrayBuffer directly without importing Node
+  // built-ins or the package's separate XML-parser worker implementation.
+  const { default: readWorkbook } = await import('read-excel-file/universal');
+  const workbook = await readWorkbook(buffer, { trim: false });
+  const sheets = workbook.map(({ sheet: name, data: rawRows }) => {
     const truncatedRows = rawRows.length > MAX_ROWS + 1;
     let truncatedCols = false;
     const rows = rawRows.slice(0, MAX_ROWS + 1).map((rawRow) => {
-      const cells = (rawRow || []).map((cell) => (cell == null ? '' : String(cell)));
+      const cells = rawRow.map(displayCell);
       if (cells.length <= MAX_COLS) return cells;
       truncatedCols = true;
       return cells.slice(0, MAX_COLS);

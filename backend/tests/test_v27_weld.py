@@ -46,7 +46,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.engine as E                                          # noqa: E402
-from backend.engine import ACTION_CONTRACT, WORK_STATUS_CONTEXT     # noqa: E402
+from backend.engine import _engine_block     # noqa: E402
+
+ACTION_CONTRACT = _engine_block("ACTION_CONTRACT", lang="zh")
+WORK_STATUS_CONTEXT = _engine_block("WORK_STATUS_CONTEXT", lang="zh")
 
 SOUL = Path(E.__file__).parent / "souls" / "coordinator.txt"
 TOOLS = Path(E.__file__).parent / "tools_knowe.py"
@@ -65,8 +68,21 @@ def dispatch_result_block() -> str:
       （v0.24 踩过同一个坑：断言打在原始源码上，抓到了自己的反例注释。）
     """
     src = TOOLS.read_text("utf-8")
-    block = src.rsplit('engine.record_committed_action("propose_next")', 1)[1][:12000]
+    handler = src.split("async def handle_propose_next", 1)[1].split(
+        "async def handle_propose_remove_agent", 1,
+    )[0]
+    block = handler.split('engine.record_committed_action("propose_next")', 1)[1]
     return "\n".join(l for l in block.splitlines() if not l.strip().startswith("#"))
+
+
+def dispatch_result_text() -> str:
+    """Resolve the localized strings the handler actually composes for the model."""
+    from backend.i18n_backend import msg
+
+    return "".join(
+        msg(f"tools_knowe.py.{index}", who="测试成员")
+        for index in range(278, 285)
+    )
 
 
 # ═══════════ ① 四个源头，一个都不许留 ═══════════
@@ -175,7 +191,7 @@ def test_action_contract_is_still_last() -> None:
     src = Path(E.__file__).read_text("utf-8")
     block = src.split("agent = self._get_or_create_coordinator()")[1].split(
         "self.repair_agent_history(agent)")[0]
-    tail = block.rindex("ACTION_CONTRACT")
+    tail = block.rindex('_engine_block("ACTION_CONTRACT")')
     for other in (
         "_team_ctx", "_capability_ctx", "_handoff_ctx", "notice",
         "_work_status_ctx", "_project_root_block", "_project_ctx_block",
@@ -223,15 +239,19 @@ def test_tool_description_removes_the_motive() -> None:
 def test_tool_result_gives_an_action_not_a_judgement_call() -> None:
     """回执给的是一个**可执行的动作**（回 NOTHING_TO_ADD），不是一个要它自己拿捏的分寸。"""
     block = dispatch_result_block()
-    assert "NOTHING_TO_ADD" in block
-    assert "卡把话说完了" in block
-    assert "复读" in block
+    rendered = dispatch_result_text()
+    assert 'msg("tools_knowe.py.279")' in block
+    assert "NOTHING_TO_ADD" in rendered
+    assert "卡把话说完了" in rendered
+    assert "复读" in rendered
 
 
 def test_tool_result_still_bans_the_jargon() -> None:
     """v0.23 修的「等他交报告我来审阅」不能因为这次重写又漏回来。"""
     block = dispatch_result_block()
-    assert "等他交报告" in block and "后台黑话" in block
+    rendered = dispatch_result_text()
+    assert 'msg("tools_knowe.py.281")' in block
+    assert "等他交报告" in rendered and "后台黑话" in rendered
 
 
 # ═══════════ ⑥ 前四版的成果一样不能丢 ═══════════

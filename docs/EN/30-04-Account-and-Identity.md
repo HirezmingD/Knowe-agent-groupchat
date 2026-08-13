@@ -38,7 +38,7 @@ In Settings → Account and Identity you can **upload an avatar** to replace the
 
 "Settings → Account and Identity → About" shows Knowe's identity info:
 
-- **Version number** — the currently installed version (the v1.0.25.x series; the installer is named like `Knowe Setup 1.0.25.2.exe`, see [02 Installation and System Requirements](02-Installation-and-System-Requirements.md));
+- **Version number** — the currently installed version (the hardened desktop build is v1.0.34; the installer is named `Knowe-Setup-1.0.34.exe`, see [02 Installation and System Requirements](02-Installation-and-System-Requirements.md));
 - **Build info** — the build number, build time, and more (follow what the page actually shows).
 
 **The About page is also the uninstall entry**: you can uninstall Knowe via Settings → Account and Identity → About, or via Windows Settings → Apps. The uninstaller asks one question first (see [02 Installation and System Requirements · Uninstalling and data retention](02-Installation-and-System-Requirements.md#uninstalling-and-data-retention)):

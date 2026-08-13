@@ -8,6 +8,7 @@
 import { useKnoweStore } from '../store/store';
 import i18n from '../i18n';
 import type { Item, Member, Conv, ConnStatus } from '../store/state';
+import type { SocketAPI } from '../transport/socket';
 
 export function resetStore(): void {
   useKnoweStore.setState({
@@ -41,6 +42,7 @@ export function seedConv(
     members: opts.members ?? [],
     banner: opts.banner ?? null,
     draft: '',
+    unread: 0,
   };
   useKnoweStore.setState((s) => ({
     convs: { ...s.convs, [projectId]: conv },
@@ -62,7 +64,7 @@ export interface SocketSpy {
 
 export function installSocketSpy(): SocketSpy {
   const spy: SocketSpy = { sent: [], approved: [], rejected: [], created: [] };
-  const fake = {
+  const fake: SocketAPI = {
     connect: () => {},
     disconnect: () => {},
     sendMessage: (content: string, projectId: string, cmid?: string, _attachments?: unknown[], forwarded?: unknown) => {
@@ -71,9 +73,15 @@ export function installSocketSpy(): SocketSpy {
     },
     approve: (id: string, projectId: string) => { spy.approved.push({ id, projectId }); },
     reject: (id: string, projectId: string) => { spy.rejected.push({ id, projectId }); },
+    feedbackInstruction: () => {},
+    stopWorker: () => {},
     createProject: (id: string, name: string) => { spy.created.push({ id, name }); },
+    setProjectDirectory: () => {},
+    cancelProjectDirectory: () => {},
     addAgents: () => {},   // [v1.0.23.4] 中途添加：测试桩记录可选项，静默即可
     requestSnapshot: () => {},
+    sendCommand: () => {},
+    noteIncremental: () => {},
     watermarks: {},
     status: 'live' as ConnStatus,
     _debugReadyState: () => 1,

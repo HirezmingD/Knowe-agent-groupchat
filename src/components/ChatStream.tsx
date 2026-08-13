@@ -153,7 +153,7 @@ export interface ChatStreamProps {
   projectId: string;
   /** [v1.0.24.6-P0] 活动态守卫：false = 隐藏会话「停摆」——停 RO/rAF/动画/倒计时/贴底跟随。
    *  只停循环不停挂载：切回时行高缓存/滚动位置原样恢复（active 变 true 即唤醒）。 */
-  active: boolean;
+  active?: boolean;
   rosterOpen: boolean;
   onToggleRoster: () => void;
   searchJump?: ChatSearchJump | null;

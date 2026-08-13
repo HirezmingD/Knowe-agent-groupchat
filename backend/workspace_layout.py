@@ -104,13 +104,39 @@ def internal_workspace_for(data_root: Path | str, project_id: str) -> Path:
     return target
 
 
-def validate_separation(workspace_root: Path, internal_root: Path) -> None:
-    """Reject a business root that contains the backend root, or vice versa."""
+def validate_separation(
+    workspace_root: Path,
+    internal_root: Path,
+    *,
+    protected_roots: tuple[Path | str, ...] = (),
+) -> None:
+    """Reject a business root that overlaps any Knowe/private application root."""
 
     workspace = _resolve(workspace_root)
     internal = _resolve(internal_root)
     if workspace == internal or workspace in internal.parents or internal in workspace.parents:
         raise ValueError("项目业务目录与 Knowe 内部工作区发生包含关系")
+    for raw_root in protected_roots:
+        protected = _resolve(raw_root)
+        if (
+            workspace == protected
+            or workspace in protected.parents
+            or protected in workspace.parents
+        ):
+            raise ValueError(f"项目业务目录与受保护的 Knowe 路径发生包含关系：{protected}")
+
+
+def validate_peer_separation(
+    workspace_root: Path | str,
+    peer_roots: tuple[Path | str, ...],
+) -> None:
+    """Reject equal, parent or child relationships between business projects."""
+
+    workspace = _resolve(workspace_root)
+    for raw_peer in peer_roots:
+        peer = _resolve(raw_peer)
+        if workspace == peer or workspace in peer.parents or peer in workspace.parents:
+            raise ValueError(f"项目业务目录与另一个项目发生包含关系：{peer}")
 
 
 def _regular_files(root: Path) -> dict[str, int]:
@@ -220,5 +246,6 @@ __all__ = [
     "ensure_internal_workspace",
     "internal_workspace_for",
     "safe_component",
+    "validate_peer_separation",
     "validate_separation",
 ]

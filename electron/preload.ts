@@ -166,12 +166,14 @@ const api: KnoweBridge = {
 // 这里在挂载前后各打一行：能看到「即将挂载」但看不到「已挂载」，就说明 exposeInMainWorld 抛了。
 // 连「即将挂载」都看不到，说明 preload 压根没被加载（多半是主进程那边 preload 路径/扩展名不对，
 // 去看主进程的 'preload-error' 日志）。
-console.log('[preload] 初始化中… 即将在 window.knowe 上挂载 KnoweBridge');
-
-try {
-  // 只把这一个对象挂上 window.knowe；别的一概不挂。
-  contextBridge.exposeInMainWorld('knowe', api);
-  console.log('[preload] ✔ window.knowe 已挂载，方法：', Object.keys(api).join(', '));
-} catch (err) {
-  console.error('[preload] ✘ 暴露 window.knowe 失败：', err);
+if (process.isMainFrame) {
+  console.log('[preload] 初始化中… 即将在 window.knowe 上挂载 KnoweBridge');
+  try {
+    // Only the trusted top-level app/preview document gets the bridge. Project
+    // HTML lives in a subframe and must never inherit runtime tokens or IPC.
+    contextBridge.exposeInMainWorld('knowe', api);
+    console.log('[preload] ✔ window.knowe 已挂载，方法：', Object.keys(api).join(', '));
+  } catch (err) {
+    console.error('[preload] ✘ 暴露 window.knowe 失败：', err);
+  }
 }

@@ -25,7 +25,7 @@
 
 | Item | Requirement |
 |:--|:--|
-| Operating system | Windows **x64 (64-bit)**; the installer is only provided for the x64 architecture |
+| Operating system | Windows **x64 (64-bit)**; the installer is only provided for the x64 architecture. The native OS sandbox for agent terminals requires Windows 11 24H2 (build 26100) or newer; on older systems the app can still start, but terminal execution fails closed |
 | Disk space | About 700 MB–1 GB after installation (the app itself + the bundled backend runtime + the headless browser); 2 GB of free space recommended |
 | Memory | 8 GB or more recommended (no hard minimum; the bigger the team and the heavier the tasks, the higher the usage) |
 | Network | You must be able to reach the model provider's API you chose (HTTPS outbound) — see [Network requirements](#network-requirements) |
@@ -38,7 +38,7 @@
 Download the installer from the official website or a release channel. The file is named:
 
 ```
-Knowe Setup 1.0.25.2.exe
+Knowe-Setup-1.0.34.exe
 ```
 
 ## Installation steps

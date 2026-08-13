@@ -33,11 +33,11 @@ Harness（`backend/knowe_harness/`，约 4300 行）是掌管每个任务完整�
 
 ## 本地开发
 
-环境要求：Node.js 20+、Python 3.11、模型 API Key（如 DeepSeek）。
+环境要求：Node.js 22.12+、Python 3.11、模型 API Key（如 DeepSeek）。
 
 ```bash
 # 安装前端依赖
-npm install
+npm ci
 
 # 安装后端依赖
 pip install -r backend/requirements.txt
@@ -67,6 +67,7 @@ npm run test        # Vitest（前端）
 | `DEEPSEEK_BASE_URL` | 自定义模型服务地址 |
 | `KNOWE_AGENT` | Agent 模式：`fake`（离线，不调 LLM）或 `deepseek` |
 | `KNOWE_DATA_DIR` | 覆盖数据目录 |
+| `KNOWE_MXC_EXECUTABLE` | 固定版本原生终端沙箱执行器的绝对路径（通常由 Electron 注入） |
 
 支持 `.env` 文件（python-dotenv）——**切勿提交到仓库**。
 
@@ -85,7 +86,7 @@ npm run copy:chromium
 npm run dist:win
 ```
 
-产物输出到 `release/`，命名 `Knowe Setup <版本号>.exe`。
+产物输出到 `release/`，命名 `Knowe-Setup-<版本号>.exe`。
 
 > **注意**：修改后端代码后，**必须重新执行第 1 步（PyInstaller）**——electron-builder 只组装前端、不会重编后端。打包后请验证进包的 `KnoweBackend.exe` 时间戳是新生成的。
 
@@ -93,7 +94,11 @@ npm run dist:win
 
 - 所有数据**本地存储**于安装目录下 `data/`（项目、聊天记录、知识库、Token 账本）
 - 聊天记录应用内永不删除
-- Agent 在项目目录沙箱内活动，无法触碰项目根目录以外的文件
+- 文件工具受路径校验约束；模型生成的 Shell/Python 进程运行于 Windows 操作系统沙箱，工作区是唯一可写根目录且默认无网络
+- 终端要求 Windows 11 build 26100+ 且原生 MXC 探测成功；系统不支持或隔离失败时直接禁用终端，不回退到宿主 Shell
+- MXC 0.7 仍是上游早期预览；随包 AppContainer + Job 隔离会在目标机器做回归验证，但不会被描述成虚拟机级或已独立审计的安全边界
+- 界面保存的模型 Key 使用当前 Windows 用户范围的 DPAPI 静态加密，且不会进入终端子进程环境
+- 浏览器自动化保留 Chromium 沙箱，只允许公网 HTTP(S)，拒绝本机、局域网、链路本地与保留地址
 - 无遥测、无云端存储——一切留在你的机器上
 
 ## 常见问题

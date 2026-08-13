@@ -33,9 +33,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.engine as E                                          # noqa: E402
 import backend.tools_knowe as TK                                    # noqa: E402
+from backend import runtime_settings                                # noqa: E402
 from backend.engine import ProjectEngine, _strip_instruction_fence  # noqa: E402
 from backend.gate import Gate                                       # noqa: E402
 from backend.hub import Hub                                         # noqa: E402
+from backend.i18n_backend import msg                                 # noqa: E402
 
 OLD = "用 React 做一个番外展示页，包含标题、正文和返回按钮。"
 NEW = "用**纯 HTML**（不要 React）做一个番外展示页，包含标题、正文和返回按钮。"
@@ -322,7 +324,8 @@ def _aio(v):
 
 # ═══════════ ④ server 接线 ═══════════
 
-def test_server_has_the_command() -> None:
+def test_server_has_the_command(monkeypatch) -> None:
+    monkeypatch.setattr(runtime_settings, "language", lambda: "zh")
     src = Path(Path(E.__file__).parent / "server.py").read_text("utf-8") \
         if (Path(E.__file__).parent / "server.py").exists() else None
     if src is None:
@@ -330,7 +333,8 @@ def test_server_has_the_command() -> None:
     assert "async def _cmd_feedback_instruction" in src
     assert "eng.adjust_instruction(approval_id, feedback)" in src
     # 失败要出声：静默 = 卡永远转圈，比报错难受得多
-    assert "没能按你的意见调整指令" in src
+    assert 'msg("server.py.337"' in src
+    assert "没能按你的意见调整指令" in msg("server.py.337", reason="x")
 
 
 # ═══════════ ⑤ 别打破 approve / reject ═══════════

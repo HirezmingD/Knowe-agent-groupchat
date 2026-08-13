@@ -15,7 +15,7 @@
 架构与本地开发说明见 [TECH.zh-CN.md](./TECH.zh-CN.md)：
 
 ```bash
-npm install
+npm ci
 pip install -r backend/requirements.txt
 npm run electron:dev
 ```

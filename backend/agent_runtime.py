@@ -41,13 +41,14 @@ import logging
 import os
 import re
 import signal
-import subprocess
 import time
 import uuid
 import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol, TypeVar
+
+from . import sandbox_runner
 
 log = logging.getLogger("knowe.runtime")
 
@@ -70,7 +71,7 @@ class ToolError(Exception):
 # Windows 命令规范化（源头消除「-p」目录事故）
 # ═══════════════════════════════════════════════════════════════
 # Worker 的 LLM 习惯生成 Linux 写法的 `mkdir -p 目录`；后端用
-# `create_subprocess_shell` 执行，Windows 上 = `cmd.exe /c`。
+# MXC 内部最终由 Windows `cmd.exe /c` 执行。
 # cmd.exe 的 mkdir 有两处跟 Linux 不同，都会出事故（2026-08-09 实测）：
 #   ① 不认 `-p` 标志——把它当**第一个路径参数**，静默建出名为「-p」的目录、
 #      退出码 0，模型还以为成功了；
@@ -174,26 +175,20 @@ class AttemptProcessRegistry:
             if len(running) >= self.max_processes:
                 raise RuntimeError(f"attempt background process limit reached ({self.max_processes})")
 
-            environment = os.environ.copy()
-            environment.update(
-                {
-                    "KNOWE_PROJECT_ID": self.project_id,
-                    "KNOWE_TASK_ID": self.task_id,
-                    "KNOWE_ATTEMPT_ID": self.attempt_id,
-                    "KNOWE_WORKSPACE_ROOT": str(self.workspace_root),
-                }
-            )
-            kwargs: dict[str, Any] = {
-                "cwd": str(workdir),
-                "stdout": asyncio.subprocess.PIPE,
-                "stderr": asyncio.subprocess.STDOUT,
-                "env": environment,
+            environment = {
+                "KNOWE_PROJECT_ID": self.project_id,
+                "KNOWE_TASK_ID": self.task_id,
+                "KNOWE_ATTEMPT_ID": self.attempt_id,
             }
-            if os.name == "nt":
-                kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            else:
-                kwargs["start_new_session"] = True
-            process = await asyncio.create_subprocess_shell(command, **kwargs)
+            try:
+                process = await sandbox_runner.spawn(
+                    command,
+                    workspace_root=self.workspace_root,
+                    cwd=workdir,
+                    env=environment,
+                )
+            except sandbox_runner.SandboxUnavailable as exc:
+                raise RuntimeError(f"background terminal sandbox unavailable: {exc}") from None
             process_id = "attempt_proc_" + uuid.uuid4().hex[:12]
             item = _AttemptProcess(process_id, command, process, time.monotonic())
             item.reader_task = asyncio.create_task(
@@ -251,15 +246,12 @@ class AttemptProcessRegistry:
 
     async def _terminate(self, item: _AttemptProcess, *, immediate: bool) -> None:
         process = item.process
+        terminated = False
         if process.returncode is None:
+            terminated = True
             try:
                 if os.name == "nt":
-                    killer = await asyncio.create_subprocess_exec(
-                        "taskkill", "/PID", str(process.pid), "/T", "/F",
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await killer.wait()
+                    sandbox_runner.terminate(process, force=immediate)
                 else:
                     sig = signal.SIGKILL if immediate else signal.SIGTERM
                     os.killpg(process.pid, sig)
@@ -271,16 +263,23 @@ class AttemptProcessRegistry:
             except asyncio.TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
                     if os.name == "nt":
-                        process.kill()
+                        sandbox_runner.terminate(process, force=True)
                     else:
                         os.killpg(process.pid, signal.SIGKILL)
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(process.wait(), timeout=2.0)
+        if terminated and os.name == "nt":
+            try:
+                sandbox_runner.recover_after_termination()
+            except sandbox_runner.SandboxUnavailable as exc:
+                log.error("attempt sandbox policy recovery failed: %s", exc)
         if item.reader_task is not None:
             if not item.reader_task.done():
                 item.reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await item.reader_task
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await sandbox_runner.wait_for_cleanup(process)
 
     async def aclose(self, *, immediate: bool = False) -> None:
         async with self._lock:
@@ -302,7 +301,7 @@ class AttemptProcessRegistry:
                 continue
             try:
                 if os.name == "nt":
-                    process.kill()
+                    sandbox_runner.terminate(process)
                 else:
                     os.killpg(process.pid, signal.SIGKILL)
             except Exception:

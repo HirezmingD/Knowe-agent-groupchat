@@ -1,8 +1,9 @@
 /** 文件类型到具体渲染器的唯一纯 switch；重型依赖通过 React.lazy 分块加载。 */
 
 import React, { Suspense, lazy, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { PreviewFilePayload } from '../shared/bridge';
-import { kindOf } from './fileKinds';
+import { extOf, kindOf } from './fileKinds';
 import CodePreview from './renderers/CodePreview';
 import HtmlPreview from './renderers/HtmlPreview';
 import ImagePreview from './renderers/ImagePreview';
@@ -37,6 +38,7 @@ const PreviewRenderer: React.FC<PreviewRendererProps> = ({
   onMounted,
   onOpenRelative,
 }) => {
+  const { t } = useTranslation();
   useEffect(() => {
     onMounted(tabKey);
   }, [onMounted, tabKey]);
@@ -60,7 +62,11 @@ const PreviewRenderer: React.FC<PreviewRendererProps> = ({
       />
     ); break;
     case 'text': content = <TextPreview {...props} />; break;
-    default: content = <FallbackPreview {...props} />;
+    default: {
+      const ext = (file.ext || extOf(file.name || file.path)).replace(/^\./, '').toLowerCase();
+      const reason = ext === 'xls' ? t('sheet.preview.legacyXls') : undefined;
+      content = <FallbackPreview {...props} reason={reason} />;
+    }
   }
 
   return <Suspense fallback={<PreviewLoading />}>{content}</Suspense>;
