@@ -360,6 +360,19 @@ class Config:
     provider_pool_timeout_s: float | None = field(
         default_factory=lambda: _optional_positive_float("KNOWE_PROVIDER_POOL_TIMEOUT", 10.0))
 
+    # ── [v1.0.34] 省 token 机制（2026-08-13 实测通过后正式上线：默认开）──
+    # 工具结果流压缩 + 查询感知投影 + 预算 token 化。全部阈值集中在此，禁止散落写死。
+    # 后台开关用户不可见；env 仍可覆盖（KNOWE_TOOL_COMPRESS=0 可临时关闭）。
+    tool_compress_enabled: bool = field(default_factory=lambda: _flag("KNOWE_TOOL_COMPRESS", True))
+    tool_compress_min_chars: int = field(
+        default_factory=lambda: int(os.environ.get("KNOWE_TOOL_COMPRESS_MIN_CHARS", "2000")))
+    tool_compress_log_run_min: int = field(
+        default_factory=lambda: int(os.environ.get("KNOWE_TOOL_COMPRESS_LOG_RUN_MIN", "3")))
+    query_aware: bool = field(default_factory=lambda: _flag("KNOWE_QUERY_AWARE", True))
+    # 模型上下文窗口（token 估算基准）。安全边际 0.8 在 context_compressor 内应用。
+    model_context_window: int = field(
+        default_factory=lambda: int(os.environ.get("KNOWE_MODEL_CONTEXT_WINDOW", "65536")))
+
     # ── [v0.5 #10] 新群建好时，项目经理主动说第一句话 ──
     #
     # ⚠ Fake 档默认**关掉**。原因：FakeAgent 的剧本是「收到：「<你说的话>」…」——
@@ -388,7 +401,7 @@ class Config:
 
     # ── [v0.12 D · 问题五 5e] 平台自我认知 ──
     # 版本号（知知的平台上下文里报给用户）。发版时改这里或用环境变量。
-    version: str = field(default_factory=lambda: os.environ.get("KNOWE_VERSION", "1.0.25.2"))
+    version: str = field(default_factory=lambda: os.environ.get("KNOWE_VERSION", "1.0.34"))
     # 安装目录（平台变更日志扫描的根）。Electron 流程靠 KNOWE_INSTALL_ROOT 注入；
     #   PyInstaller 冻结态兜底取 _MEIPASS 父目录（直接跑 exe 也拿得到安装根）；
     #   开发态从包位置往上推两级 = 项目根。见 _install_root_default()。

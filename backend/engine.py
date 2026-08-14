@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 from knowe_core.provider_identity import humanize_provider_error, provider_target
 from .token_pricing import estimate_cost
 from .i18n_backend import msg
+from .content_compress import snapshot_compression_stats  # [v1.0.34-M4] 压缩台账快照
 from knowe_provenance import current_provenance_dict, normalize_provenance
 from knowe_harness import (
     CompletionAwareTaskRunRepository,
@@ -1868,6 +1869,15 @@ class ProjectEngine:
             [row for row in raw_calls if isinstance(row, dict)]
             if isinstance(raw_calls, list) else []
         )
+        # [v1.0.34-实测v2] 落盘诊断：calls 数量与内容唯一性
+        try:
+            import json as _json
+            uniq = {_json.dumps(c, sort_keys=True, ensure_ascii=False) for c in calls}
+            log.warning("[persist-debug] agent=%s n_calls=%d n_uniq=%d ts=%s",
+                        getattr(agent, "agent_id", "?"), len(calls), len(uniq),
+                        datetime.now().astimezone().isoformat(timespec="seconds"))
+        except Exception:
+            pass
 
         # Compatibility with a provider adapter that exposes only one turn-level aggregate.
         # Native KnoweAgent emits the detailed list, so this path is never used there.
@@ -1941,6 +1951,27 @@ class ProjectEngine:
                     "output": output,
                 },
             }
+            # [v1.0.34-M4] 上下文占用三数随回合落盘：
+            #   compression_count / saved_chars = 本回合自动压缩台账（快照即清零，
+            #   落盘顺序=回合结束顺序，聚合按范围求和即「本会话累计」）
+            #   context_usage_pct = 投影后估算 token ÷ 模型窗口（agent 回合内计算
+            #   并附在 result 私有字段，见 knowe_agent；缺失时省略，前端显示 --）
+            compression = snapshot_compression_stats(reset=True)
+            if compression["count"] > 0:
+                record["compression"] = {
+                    "count": compression["count"],
+                    "saved_chars": compression["saved_chars"],
+                    "by_method": compression["by_method"],
+                }
+            context_pct = result.pop("_context_usage_pct", None)
+            if isinstance(context_pct, (int, float)) and 0 <= context_pct <= 100:
+                record["context_usage_pct"] = round(float(context_pct), 2)
+            # [v1.0.34-M4-v2] 投影保留条数随回合落盘：agent 已算好投影后保留的消息条数
+            #   （projected_message_count 随 result dict 返回，见 knowe_agent），这里随记录
+            #   写出供前端「自动精简」行使用。
+            projected_count = result.get("projected_message_count", 0)
+            if isinstance(projected_count, int) and projected_count > 0:
+                record["projected_message_count"] = projected_count
             cny_cost = estimate_cost(
                 model, cache_hit_input=hit, cache_miss_input=miss, output=output,
                 currency="CNY",
@@ -1954,9 +1985,13 @@ class ProjectEngine:
             if usd_cost is not None:
                 record["price_usd"] = usd_cost
             # [v1.0.24.4] 遥测落盘走持久化队列，不占主循环；提交即计数。
+            # [v1.0.34-实测v2] 闭包捕获修复：lambda 必须绑定本次循环的 _record 快照，
+            # 否则后台队列延迟执行时 _record 已被循环覆盖成最后一条 → N 次调用全写同一行。
             _store, _pid, _record = self._store, self.project_id, record
-            _store.defer_bg(lambda: _store.append_token_usage(_pid, _record),
-                            description="PM token 用量")
+            _store.defer_bg(
+                lambda _s=_store, _p=_pid, _r=dict(_record): _s.append_token_usage(_p, _r),
+                description="PM token 用量",
+            )
             persisted += 1
 
         if persisted:
@@ -2013,6 +2048,14 @@ class ProjectEngine:
                 "output": output,
             },
         }
+        # [v1.0.34-M4] Worker 回合压缩台账同样随落盘快照（与 PM 路径同口径）
+        compression = snapshot_compression_stats(reset=True)
+        if compression["count"] > 0:
+            record["compression"] = {
+                "count": compression["count"],
+                "saved_chars": compression["saved_chars"],
+                "by_method": compression["by_method"],
+            }
         cny_cost = estimate_cost(
             model, cache_hit_input=hit, cache_miss_input=miss, output=output,
             currency="CNY",
@@ -2027,9 +2070,12 @@ class ProjectEngine:
             record["price_usd"] = usd_cost
         try:
             # [v1.0.24.4] 遥测落盘走持久化队列，不占主循环；提交即计数。
+            # [v1.0.34-实测v2] 闭包捕获修复（同 PM 路径）：绑定 _record 快照。
             _store, _pid, _record = self._store, self.project_id, record
-            _store.defer_bg(lambda: _store.append_token_usage(_pid, _record),
-                            description="Worker token 用量")
+            _store.defer_bg(
+                lambda _s=_store, _p=_pid, _r=dict(_record): _s.append_token_usage(_p, _r),
+                description="Worker token 用量",
+            )
             log.debug(
                  "[%s] %s Token 统计已提交落盘：model=%s hit=%d miss=%d out=%d",
                 self.project_id, worker_id, model, hit, miss, output,

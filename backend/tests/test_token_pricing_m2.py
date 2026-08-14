@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from backend.token_pricing import estimate_cost, get_model_pricing
+from datetime import datetime, timezone
+
+from backend.token_pricing import estimate_cost, get_model_pricing, pricing_payload
+
+# 固定空闲时刻（UTC 05:00 = 北京 13:00，非高峰）；_PEAK_RATES 模型断言需传 now
+_OFF_PEAK = datetime(2026, 8, 14, 5, 0, tzinfo=timezone.utc)
+_PEAK = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
 
 
 def _cost(model: str, *, hit: int = 0, miss: int = 0, out: int = 0, currency: str = "USD"):
@@ -120,11 +126,12 @@ def test_spot_check_per_provider():
         "gemini-3.6-flash": (0.15, 1.50, 7.50),
         "glm-5.2": (0.26, 1.40, 4.40),
         "kimi-k3": (0.30, 3.00, 15.00),
-        "deepseek-v4-pro": (0.003625, 0.435, 0.87),
+        "deepseek-v4-pro": (0.022, 0.66, 1.98),  # [2026-08-14] 峰谷新价空闲档 USD
         "qwen3.7-max": (None, 1.25, 3.75),  # USD 无缓存档（1.20 是 CNY 百炼命中价）
         "qwen/qwen3.8-max": (0.40, 2.00, 6.00),  # [v1.0.24.2] OR 实时价（缓存=输入×0.2）
         "MiniMax-M3": (0.06, 0.30, 1.20),
         "grok-4.20-0309-reasoning": (0.20, 1.25, 2.50),
+        "grok-4.6": (0.50, 2.00, 6.00),  # [2026-08-14] 官方 <200K 档 USD
         "anthropic/claude-opus-5": (0.50, 5.00, 25.00),
         "openai/gpt-5.6-luna": (0.01, 0.10, 0.60),
         "deepseek/deepseek-v3-0324": (0.135, 0.27, 1.12),
@@ -135,7 +142,8 @@ def test_spot_check_per_provider():
         "tencent/hy3": (0.033, 0.132, 0.528),
     }
     for model, (hit, miss, out) in cases.items():
-        pricing = get_model_pricing(model, "USD")
+        # now=_OFF_PEAK：deepseek 断言空闲档；非 _PEAK_RATES 模型不受 now 影响
+        pricing = get_model_pricing(model, "USD", now=_OFF_PEAK)
         assert pricing is not None, f"{model} 应有 USD 价"
         assert pricing.cache_hit_input_cost_per_1M == hit, model
         assert pricing.input_cost_per_1M == miss, model
@@ -156,3 +164,70 @@ def test_spot_check_per_provider():
     # USD 键存在但未公布 → 返回 known=False 对象（input_cost 为 None），不报「暂无价格表」歧义
     pricing = get_model_pricing("qwen3.8-max", "USD")
     assert pricing is not None and pricing.input_cost_per_1M is None
+
+
+# ── DeepSeek 峰谷定价（[2026-08-14] 官方 2026-08-17 生效） ────────────
+
+def test_grok_4_6_tier_boundary():
+    # [2026-08-14] grok-4.6 官方分档：<200K 输入 $0.50/$2/$6；≥200K $1/$4/$12
+    low = _cost("grok-4.6", hit=100_000, miss=100_000, out=10_000)
+    assert abs(low - (0.05 + 0.20 + 0.06)) < 1e-9
+    high = _cost("grok-4.6", hit=150_000, miss=150_000, out=10_000)
+    assert abs(high - (0.15 + 0.60 + 0.12)) < 1e-9
+    # 边界恰等 200K → 低档（≤）
+    edge = _cost("grok-4.6", hit=200_000, miss=0, out=0)
+    assert abs(edge - 200_000 / 1e6 * 0.50) < 1e-9
+
+
+def test_deepseek_peak_offpeak_get_model_pricing():
+    # 空闲档（_RAW 新价）：flash CNY 0.05/1.50/4.50、USD 0.007/0.22/0.66
+    p = get_model_pricing("deepseek-v4-flash", "CNY", now=_OFF_PEAK)
+    assert p is not None and p.known
+    assert p.cache_hit_input_cost_per_1M == 0.05
+    assert p.input_cost_per_1M == 1.50
+    assert p.output_cost_per_1M == 4.50
+    p = get_model_pricing("deepseek-v4-flash", "USD", now=_OFF_PEAK)
+    assert p is not None
+    assert (p.cache_hit_input_cost_per_1M, p.input_cost_per_1M, p.output_cost_per_1M) \
+        == (0.007, 0.22, 0.66)
+    # 高峰档（_PEAK_RATES）：flash CNY 0.10/3.00/9.00、USD 0.014/0.44/1.32
+    p = get_model_pricing("deepseek-v4-flash", "CNY", now=_PEAK)
+    assert p is not None
+    assert (p.cache_hit_input_cost_per_1M, p.input_cost_per_1M, p.output_cost_per_1M) \
+        == (0.10, 3.00, 9.00)
+    p = get_model_pricing("deepseek-v4-flash", "USD", now=_PEAK)
+    assert p is not None
+    assert (p.cache_hit_input_cost_per_1M, p.input_cost_per_1M, p.output_cost_per_1M) \
+        == (0.014, 0.44, 1.32)
+    # pro 高峰档：CNY 0.30/9.00/27.00
+    p = get_model_pricing("deepseek-v4-pro", "CNY", now=_PEAK)
+    assert p is not None
+    assert (p.cache_hit_input_cost_per_1M, p.input_cost_per_1M, p.output_cost_per_1M) \
+        == (0.30, 9.00, 27.00)
+
+
+def test_deepseek_peak_offpeak_estimate_cost():
+    # 高峰 1M 命中 + 1M 未命中 + 1M 输出 = 0.10 + 3.00 + 9.00（flash CNY）
+    cost = estimate_cost(
+        "deepseek-v4-flash",
+        cache_hit_input=1_000_000, cache_miss_input=1_000_000, output=1_000_000,
+        currency="CNY", now=_PEAK,
+    )
+    assert cost is not None and abs(cost - 12.10) < 1e-9
+    # 空闲 = 0.05 + 1.50 + 4.50
+    cost = estimate_cost(
+        "deepseek-v4-flash",
+        cache_hit_input=1_000_000, cache_miss_input=1_000_000, output=1_000_000,
+        currency="CNY", now=_OFF_PEAK,
+    )
+    assert cost is not None and abs(cost - 6.05) < 1e-9
+
+
+def test_deepseek_peak_payload_rate_period():
+    # payload 带当前档位：高峰 → "peak"，空闲 → "off_peak"
+    assert pricing_payload("deepseek-v4-flash", "CNY", now=_PEAK)["rate_period"] == "peak"
+    assert pricing_payload("deepseek-v4-flash", "CNY", now=_OFF_PEAK)["rate_period"] == "off_peak"
+    # 非峰谷模型不受影响
+    payload = pricing_payload("kimi-k2.6", "CNY", now=_PEAK)
+    assert payload["known"] and payload["rate_period"] == "peak"
+    assert payload["input_cost_per_1M"] == 6.50

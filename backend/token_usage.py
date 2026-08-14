@@ -286,6 +286,44 @@ def normalize_token_usage_record(raw: Any) -> dict[str, Any] | None:
         record["project_id"] = project_id
     if conversation_id:
         record["conversation_id"] = conversation_id
+    # [v1.0.34-M4] 压缩台账：count / saved_chars / by_method（可选，缺失=无压缩）
+    compression = raw.get("compression")
+    if isinstance(compression, Mapping) and (
+        "count" in compression or "saved_chars" in compression
+    ):
+        try:
+            comp_count = int(compression.get("count") or 0)
+            comp_saved = int(compression.get("saved_chars") or 0)
+        except (TypeError, ValueError, OverflowError):
+            comp_count = comp_saved = 0
+        comp_method = compression.get("by_method")
+        record["compression"] = {
+            "count": max(0, comp_count),
+            "saved_chars": max(0, comp_saved),
+            "by_method": (
+                {str(k): int(v) for k, v in comp_method.items()}
+                if isinstance(comp_method, Mapping)
+                else {}
+            ),
+        }
+    # [v1.0.34-M4] 上下文占用百分比（投影后估算 token ÷ 窗口；可选）
+    pct = raw.get("context_usage_pct")
+    if pct is not None:
+        try:
+            numeric = float(pct)
+        except (TypeError, ValueError, OverflowError):
+            numeric = -1.0
+        if math.isfinite(numeric) and 0 <= numeric <= 100:
+            record["context_usage_pct"] = round(numeric, 2)
+    # [v1.0.34-M4-v2] 投影保留条数（本回合投影后保留的历史消息条数；可选）
+    projected = raw.get("projected_message_count")
+    if projected is not None:
+        try:
+            projected_n = int(projected)
+        except (TypeError, ValueError, OverflowError):
+            projected_n = -1
+        if projected_n > 0:
+            record["projected_message_count"] = projected_n
     for price_key in ("price_cny", "price_usd"):
         price_value = raw.get(price_key)
         if price_value is None:
@@ -349,6 +387,16 @@ def aggregate_token_usage(
     priced_cost_cny = 0.0
     priced_cost_usd = 0.0
     unpriced_tokens = 0
+    # [v1.0.34-M4] 上下文占用三数：压缩次数/节省字符累计，占用率取范围内最新一条
+    total_compression_count = 0
+    total_saved_chars = 0
+    compression_by_method: dict[str, int] = defaultdict(int)
+    # [v1.0.34-M4-v2] 瞬时组（本回合=范围内最新一条含数据的记录）+ 累计投影条数
+    total_projected_count = 0
+    latest_compression_count: int | None = None
+    latest_saved_chars: int | None = None
+    latest_projected_count: int | None = None
+    latest_context_usage_pct: float | None = None
 
     for row in clean:
         usage = row["usage"]
@@ -361,6 +409,23 @@ def aggregate_token_usage(
         total_output += output
         total_cache_hit += hit
         total_cache_miss += miss
+
+        # [v1.0.34-M4] 三数累计（row 为范围过滤后的有序流，ts 递增）
+        compression = row.get("compression")
+        if compression:
+            total_compression_count += int(compression.get("count") or 0)
+            total_saved_chars += int(compression.get("saved_chars") or 0)
+            for method, method_count in (compression.get("by_method") or {}).items():
+                compression_by_method[str(method)] += int(method_count or 0)
+            # [v1.0.34-M4-v2] 瞬时组：本回合 = 最新一条含压缩数据的记录
+            latest_compression_count = int(compression.get("count") or 0)
+            latest_saved_chars = int(compression.get("saved_chars") or 0)
+        # [v1.0.34-M4-v2] 投影保留条数：累计 + 瞬时（最新一条含投影数据的记录）
+        if "projected_message_count" in row:
+            total_projected_count += int(row["projected_message_count"] or 0)
+            latest_projected_count = int(row["projected_message_count"] or 0)
+        if "context_usage_pct" in row:
+            latest_context_usage_pct = float(row["context_usage_pct"])
 
         day = daily_map[_ts_to_date(int(row["ts"]))]
         day["input_tokens"] += input_tokens
@@ -407,6 +472,10 @@ def aggregate_token_usage(
             "cache_hit_input": 0,
             "cache_miss_input": 0,
             "calls": 0,
+            # [v1.0.34] 金额=行级落盘价累加（历史冻结），非总量按当前价现算
+            "estimated_cost_cny": 0.0,
+            "estimated_cost_usd": 0.0,
+            "unpriced_tokens": 0,
         })
         model["total_input"] += input_tokens
         model["total_output"] += output
@@ -415,24 +484,33 @@ def aggregate_token_usage(
         model["cache_miss_input"] += miss
         model["calls"] += 1
 
-        cny_cost = estimate_cost(
-            model_name, cache_hit_input=hit, cache_miss_input=miss, output=output,
-            currency="CNY",
-        )
-        usd_cost = estimate_cost(
-            model_name, cache_hit_input=hit, cache_miss_input=miss, output=output,
-            currency="USD",
-        )
+        # [v1.0.34] 金额优先用落盘价（记录写入时的价格，历史冻结）；旧记录无
+        # price_* 字段才用当前价格表现算兜底——改价只影响新产生的 token。
+        cny_cost = row.get("price_cny")
+        usd_cost = row.get("price_usd")
+        if cny_cost is None:
+            cny_cost = estimate_cost(
+                model_name, cache_hit_input=hit, cache_miss_input=miss, output=output,
+                currency="CNY",
+            )
+        if usd_cost is None:
+            usd_cost = estimate_cost(
+                model_name, cache_hit_input=hit, cache_miss_input=miss, output=output,
+                currency="USD",
+            )
         if cny_cost is None and usd_cost is None:
             unpriced_tokens += total_tokens
             agent["unpriced_tokens"] += total_tokens
+            model["unpriced_tokens"] += total_tokens
         else:
             if cny_cost is not None:
                 priced_cost_cny += cny_cost
                 agent["estimated_cost_cny"] += cny_cost
+                model["estimated_cost_cny"] += cny_cost
             if usd_cost is not None:
                 priced_cost_usd += usd_cost
                 agent["estimated_cost_usd"] += usd_cost
+                model["estimated_cost_usd"] += usd_cost
 
     for agent in agent_map.values():
         agent_id = str(agent["agent_id"])
@@ -460,22 +538,13 @@ def aggregate_token_usage(
 
     for model in model_map.values():
         model_name = str(model["model"])
-        cny_cost = estimate_cost(
-            model_name,
-            cache_hit_input=int(model["cache_hit_input"]),
-            cache_miss_input=int(model["cache_miss_input"]),
-            output=int(model["total_output"]),
-            currency="CNY",
+        # [v1.0.34] model 金额 = 行级落盘价累加（与 agent/totals 同口径，历史冻结）
+        model["estimated_cost_cny"] = (
+            None if model["unpriced_tokens"] > 0 else round(model["estimated_cost_cny"], 2)
         )
-        usd_cost = estimate_cost(
-            model_name,
-            cache_hit_input=int(model["cache_hit_input"]),
-            cache_miss_input=int(model["cache_miss_input"]),
-            output=int(model["total_output"]),
-            currency="USD",
+        model["estimated_cost_usd"] = (
+            None if model["unpriced_tokens"] > 0 else round(model["estimated_cost_usd"], 2)
         )
-        model["estimated_cost_cny"] = None if cny_cost is None else round(cny_cost, 2)
-        model["estimated_cost_usd"] = None if usd_cost is None else round(usd_cost, 2)
         model["pricing"] = pricing_payload(model_name)
 
     total_tokens = total_input + total_output
@@ -520,6 +589,17 @@ def aggregate_token_usage(
             "priced_cost_usd": round(priced_cost_usd, 2),
             "cost_complete": unpriced_tokens == 0,
             "unpriced_tokens": unpriced_tokens,
+            # [v1.0.34-M4] 上下文占用三数（累计）
+            "compression_count": total_compression_count,
+            "saved_chars": total_saved_chars,
+            "compression_by_method": dict(compression_by_method),
+            "context_usage_pct": latest_context_usage_pct,
+            # [v1.0.34-M4-v2] 瞬时组（本回合=范围内最新一条含数据的记录）
+            "latest_compression_count": latest_compression_count,
+            "latest_saved_chars": latest_saved_chars,
+            "latest_projected_count": latest_projected_count,
+            # [v1.0.34-M4-v2] 投影保留条数累计
+            "projected_count": total_projected_count,
         },
         "by_agent": by_agent,
         "by_model": by_model,

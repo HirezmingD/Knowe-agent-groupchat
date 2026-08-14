@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequen
 from knowe_provenance import current_provenance_dict, normalize_provenance, unknown_legacy_provenance
 
 from knowe_core.errors import ProviderError
+from .content_compress import compress_tool_result  # [v1.0.34] 工具结果流压缩
 
 
 WORKER_TOOL_NAMES: tuple[str, ...] = (
@@ -1087,7 +1088,15 @@ class WorkerRuntime:
                                 "role": "tool",
                                 "tool_call_id": call.id,
                                 "name": call.name,
-                                "content": json.dumps(tool_result.to_dict(), ensure_ascii=False, separators=(",", ":")),
+                                # [v1.0.34] 请求载体压缩：tool_result 原文进权威存储，
+                                # 发给 provider 的 content 走 compress_tool_result（开关内判）。
+                                "content": compress_tool_result(
+                                    json.dumps(
+                                        tool_result.to_dict(),
+                                        ensure_ascii=False,
+                                        separators=(",", ":"),
+                                    )
+                                ),
                             }
                         )
                     continue

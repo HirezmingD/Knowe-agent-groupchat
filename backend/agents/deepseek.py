@@ -39,6 +39,7 @@ from knowe_core.provider_client import ProviderClient, build_http_timeout
 from knowe_core.stream_assembler import StreamAssembler
 
 from ..context_compressor import project_messages
+from ..content_compress import compress_tool_result  # [v1.0.34] 工具结果流压缩
 from ..i18n_backend import msg
 
 from ..config import CONFIG
@@ -249,7 +250,12 @@ class DeepSeekAgent:
             dict(message) for message in turn.history if isinstance(message, dict)
         ]
         authoritative.append({"role": "user", "content": turn.content})
-        projected, _ = project_messages(authoritative)
+        # [v1.0.34] M3 查询感知投影：开关开时传当前用户消息做 BM25 优先保留；
+        # 关时不传 query，行为与 v1.0.33 完全一致。
+        projected, _ = project_messages(
+            authoritative,
+            query=turn.content if CONFIG.query_aware else None,
+        )
         # [v1.0.19.4] ★ 附件在这里才真正进入发给 provider 的 messages。
         #   投影后当前回合永远是尾部 verbatim 的最后一条 user；把文本+附件块合成
         #   OpenAI 多模态数组替换它。历史/权威副本仍是纯文本，不重发 base64。
@@ -291,7 +297,9 @@ class DeepSeekAgent:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
-                    "content": result,
+                    # [v1.0.34] 请求载体压缩：权威历史 = turn.history（_run 开头副本），
+                    # messages 只发给 provider，content 走 compress_tool_result（开关内判）。
+                    "content": compress_tool_result(result),
                 })
 
 

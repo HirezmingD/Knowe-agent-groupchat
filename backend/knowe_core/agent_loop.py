@@ -23,6 +23,11 @@ from knowe_core.provider_client import ProviderClient
 from knowe_core.stream_assembler import StreamAssembler, StreamDeltaCB, ToolGenCB, VoidCB
 from knowe_core.tool_registry import ToolRegistry
 
+# [v1.0.34] 工具结果流压缩（开关在 config，compress_tool_result 内部判断）
+# 注意：knowe_core 被测试以顶级包导入（from knowe_core.agent_loop），
+# 不能用相对导入 ..，必须走 backend 绝对导入（与 agents/ 惯例不同）。
+from backend.content_compress import compress_tool_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -292,14 +297,22 @@ class AgentLoop:
 
             # Every provider tool_call_id receives exactly one tool response, including
             # errors.  This is protocol integrity, not a judgment about whether to retry.
+            # [v1.0.34] 请求载体压缩：messages 里 content 走压缩（开关开时）；
+            # new_messages（权威历史）始终存原文，压缩只影响发给 provider 的副本。
             for tool_call, tool_result in execution:
                 tool_msg = {
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
-                    "content": tool_result,
+                    "content": compress_tool_result(tool_result),
                 }
                 messages.append(tool_msg)
-                result.new_messages.append(copy.deepcopy(tool_msg))
+                result.new_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": tool_result,
+                    }
+                )
 
     @staticmethod
     def _build_initial_messages(config: AgentLoopConfig) -> list[dict[str, Any]]:

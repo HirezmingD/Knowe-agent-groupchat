@@ -23,6 +23,10 @@ import { RangeCalendar, localDateKey } from './RangeCalendar';
 
 const NUMBER_FORMAT = new Intl.NumberFormat('zh-CN');
 
+/** [v1.0.34-M4-v2] 字符→词元估算系数：1 词元 ≈ 1.6 字符（中文为主，代码/英文
+ *  混排 ±20% 误差，用户拍板 B 方案：前端近似换算并标注「约」，不做后端 tokenizer）。 */
+const ZH_TO_TOKEN_RATIO = 1.6;
+
 type DetailTab = 'model' | 'agent';
 
 /** 拖拽手柄的最小面板高度（px）：低于此值内容无可用视口。 */
@@ -35,6 +39,29 @@ function formatTokens(value: number): string {
 function formatCompact(value: number): string {
   // 全量数字展示（不简写 k/M），如 968,828,341；长度自适应由调用方处理。
   return NUMBER_FORMAT.format(Math.max(0, Math.trunc(value || 0)));
+}
+
+/** [v1.0.34-M4-v2] 累计大数简写：中文 千/万/亿/兆，英文 K/M/B/T（按当前语言）。
+ *  阈值：zh ≥1e3 千、≥1e4 万、≥1e8 亿、≥1e12 兆；en ≥1e3 K、≥1e6 M、≥1e9 B、≥1e12 T；
+ *  小数字保留全量。 */
+function formatZhCompact(value: number): string {
+  const n = Math.max(0, Math.trunc(value || 0));
+  const trim = (v: number): string => {
+    const s = v.toFixed(1);
+    return s.endsWith('.0') ? s.slice(0, -2) : s;
+  };
+  if (i18n.language.startsWith('zh')) {
+    if (n >= 1e12) return `${trim(n / 1e12)}兆`;
+    if (n >= 1e8) return `${trim(n / 1e8)}亿`;
+    if (n >= 1e4) return `${trim(n / 1e4)}万`;
+    if (n >= 1e3) return `${trim(n / 1e3)}千`;
+  } else {
+    if (n >= 1e12) return `${trim(n / 1e12)}T`;
+    if (n >= 1e9) return `${trim(n / 1e9)}B`;
+    if (n >= 1e6) return `${trim(n / 1e6)}M`;
+    if (n >= 1e3) return `${trim(n / 1e3)}K`;
+  }
+  return NUMBER_FORMAT.format(n);
 }
 
 function formatAxisCompact(value: number): string {
@@ -114,31 +141,35 @@ interface StatCardProps {
   accent?: boolean;
   sub?: React.ReactNode;
   delay: number;
+  className?: string;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ label, value, accent, sub, delay }) => {
+const StatCard: React.FC<StatCardProps> = ({ label, value, accent, sub, delay, className }) => {
   const valueRef = useRef<HTMLDivElement>(null);
-  const [fontScale, setFontScale] = useState(1);
+  const [fontSize, setFontSize] = useState(28);
   useEffect(() => {
     const el = valueRef.current;
     if (!el) return;
+    // [v1.0.34-M4] 数字位数动态适配：字号 = clamp(11px, 卡片宽度 ÷ (位数 × 单字宽系数), 28px)。
+    //   替换旧的「scrollWidth 溢出 → 粗暴缩到 0.55」：按位数精确计算，拉宽即恢复大字号。
+    //   单字宽系数 0.62（tabular-nums 半角数字 + 千分位逗号的实际平均字宽）。
     const fit = (): void => {
-      const avail = el.clientWidth;
-      const natural = el.scrollWidth;
-      if (natural > avail && natural > 0) {
-        setFontScale(Math.max(0.55, avail / natural));
-      } else {
-        setFontScale(1);
+      const digits = value.replace(/[^0-9]/g, '').length;
+      const width = el.clientWidth;
+      if (digits <= 0 || width <= 0) {
+        setFontSize(28);
+        return;
       }
+      const computed = Math.floor(width / (digits * 0.62));
+      setFontSize(Math.max(11, Math.min(28, computed)));
     };
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
   }, [value]);
-  const fontSize = Math.round(28 * fontScale);
   return (
-    <div className="tk-card" style={{ animationDelay: `${delay}ms` }}>
+    <div className={'tk-card' + (className ? ` ${className}` : '')} style={{ animationDelay: `${delay}ms` }}>
       <div className="tk-card-label">{label}</div>
       <div
         ref={valueRef}
@@ -638,6 +669,18 @@ export const TokenUsagePanel: React.FC = () => {
   const totals = data?.totals;
   const hasUsage = Boolean(totals?.total_calls);
 
+  // [v1.0.34-M4] 上下文占用三数：占用率（-- 缺失）/ 自动压缩次数 / 节省字符
+  const contextPct = totals?.context_usage_pct ?? null;
+  const compressionCount = totals?.compression_count ?? 0;
+  const savedChars = totals?.saved_chars ?? 0;
+  // [v1.0.34-M4-v2] 瞬时组（本回合=最新一条含数据的记录）+ 投影保留条数
+  const latestCompressionCount = totals?.latest_compression_count ?? null;
+  const latestSavedChars = totals?.latest_saved_chars ?? null;
+  const latestProjectedCount = totals?.latest_projected_count ?? null;
+  const projectedCount = totals?.projected_count ?? 0;
+  const hasContextData = hasUsage || compressionCount > 0 || savedChars > 0
+    || projectedCount > 0 || latestProjectedCount != null;
+
   const animatedCalls = useCountUp(totals?.total_calls ?? 0);
   const animatedTokens = useCountUp(totals?.total_tokens ?? 0);
 
@@ -794,23 +837,23 @@ export const TokenUsagePanel: React.FC = () => {
           </div>
         </div>
 
-        {/* ── 统计卡 ×3 ── */}
+        {/* ── 统计卡区（2×2 左半 + 右侧通栏上下文卡）──
+             左上半：请求次数 | 消费金额 左右平分
+             左下半：词元 Token 卡（数字居中）
+             右侧整列：上下文占用（跨两行） */}
         <div className="tk-cards">
           <StatCard
+            className="tk-stat-calls"
             label={t('token.usage.panel.19')}
             value={formatTokens(animatedCalls)}
             delay={0}
           />
           <StatCard
-            label={t('token.usage.panel.tokens')}
-            value={formatCompact(animatedTokens)}
-            delay={40}
-          />
-          <StatCard
+            className="tk-stat-cost"
             label={t('token.usage.panel.15')}
             value={costPrimary == null ? '--' : (isEnglish ? formatUsd(costPrimary) : formatCny(costPrimary))}
             accent
-            delay={80}
+            delay={40}
             sub={(
               <>
                 {costSecondary != null && (
@@ -820,6 +863,53 @@ export const TokenUsagePanel: React.FC = () => {
               </>
             )}
           />
+          <StatCard
+            className="tk-stat-tokens"
+            label={t('token.usage.panel.tokens')}
+            value={formatCompact(animatedTokens)}
+            delay={80}
+          />
+          {/* [v1.0.34-M4/M4-v2] 上下文占用：右侧通栏（跨两行）。
+              上半一行：合并标题「AI 记忆用量（最近一次对话）」+ 占用率大字，水平居中；
+              下半纵向铺满：两个指标各占整行宽 */}
+          <div className="tk-card tk-stat-context">
+            <div className="tk-context-top">
+              <span className="tk-context-label">{t('token.usage.panel.ctxTitle')}</span>
+              <span className="tk-context-value">
+                {contextPct == null ? '--' : `${Math.round(contextPct)}%`}
+              </span>
+            </div>
+            {hasContextData ? (
+              <div className="tk-context-metrics">
+                <div className="tk-context-metric">
+                  <div className="tk-context-metric-head">
+                    <span className="tk-context-metric-name">{t('token.usage.panel.ctxCompress')}</span>
+                    <span className="tk-context-metric-hint">{t('token.usage.panel.ctxCompressHint')}</span>
+                  </div>
+                  <div className="tk-context-metric-row">
+                    <b>{t('token.usage.panel.ctxColLatest')}</b> {latestCompressionCount == null ? '--' : <><span className="tk-ctx-num">{latestCompressionCount}</span>{' '}{t('token.usage.panel.ctxTimesUnit')}</>}
+                    <span className="tk-ctx-dot">·</span>
+                    <b>{t('token.usage.panel.ctxColTotal')}</b> <span className="tk-ctx-num">{compressionCount}</span>{' '}{t('token.usage.panel.ctxTimesUnit')}
+                    <span className="tk-ctx-dot">·</span>
+                    {t('token.usage.panel.ctxApprox')} <span className="tk-ctx-num">{formatZhCompact(savedChars / ZH_TO_TOKEN_RATIO)}</span>{' '}{t('token.usage.panel.ctxTokensUnit')}
+                  </div>
+                </div>
+                <div className="tk-context-metric">
+                  <div className="tk-context-metric-head">
+                    <span className="tk-context-metric-name">{t('token.usage.panel.ctxPrune')}</span>
+                    <span className="tk-context-metric-hint">{t('token.usage.panel.ctxPruneHint')}</span>
+                  </div>
+                  <div className="tk-context-metric-row">
+                    <b>{t('token.usage.panel.ctxColLatest')}</b> {latestProjectedCount == null ? '--' : <><span className="tk-ctx-num">{formatTokens(latestProjectedCount)}</span>{' '}{t('token.usage.panel.ctxEntriesUnit')}</>}
+                    <span className="tk-ctx-dot">·</span>
+                    <b>{t('token.usage.panel.ctxColTotal')}</b> <span className="tk-ctx-num">{formatTokens(projectedCount)}</span>{' '}{t('token.usage.panel.ctxEntriesUnit')}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="tk-context-empty">{t('token.usage.panel.ctxEmpty')}</div>
+            )}
+          </div>
         </div>
 
         {/* ── 趋势图 ── */}

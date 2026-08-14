@@ -47,6 +47,18 @@ export interface TokenUsageTotals {
   priced_cost_usd?: number;
   cost_complete?: boolean;
   unpriced_tokens?: number;
+  // [v1.0.34-M4] 上下文占用三数
+  compression_count: number;
+  saved_chars: number;
+  compression_by_method: Record<string, number>;
+  /** 范围内最新一条记录的投影后估算 token ÷ 窗口；无数据为 null。 */
+  context_usage_pct: number | null;
+  // [v1.0.34-M4-v2] 瞬时组（本回合=范围内最新一条含数据的记录；无数据为 null）
+  latest_compression_count: number | null;
+  latest_saved_chars: number | null;
+  latest_projected_count: number | null;
+  // [v1.0.34-M4-v2] 投影保留条数累计
+  projected_count: number;
 }
 
 export interface TokenUsageAgent {
@@ -132,6 +144,13 @@ function finiteNumber(value: unknown, fallback = 0): number {
 function nonNegativeInt(value: unknown): number {
   const number = finiteNumber(value, 0);
   return number >= 0 ? Math.trunc(number) : 0;
+}
+
+/** [v1.0.34-M4-v2] 可空非负整数：null/缺失保留 null，非法值回退 null。 */
+function nullableNonNegInt(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const number = finiteNumber(value, -1);
+  return number >= 0 ? Math.trunc(number) : null;
 }
 
 function nullableCost(value: unknown): number | null {
@@ -236,6 +255,15 @@ function normalizePayload(event: Record<string, unknown>): TokenUsageData {
   const totalInput = nonNegativeInt(totals.total_input);
   const totalOutput = nonNegativeInt(totals.total_output);
   const currentModel = typeof event.current_model === 'string' ? event.current_model.trim() : '';
+  const compressionByMethod: Record<string, number> = {};
+  const rawByMethod = objectOf(totals.compression_by_method);
+  for (const [method, count] of Object.entries(rawByMethod)) {
+    compressionByMethod[method] = nonNegativeInt(count);
+  }
+  const rawPct = totals.context_usage_pct;
+  const contextPct = typeof rawPct === 'number' && Number.isFinite(rawPct) && rawPct >= 0 && rawPct <= 100
+    ? rawPct
+    : null;
   return {
     project_id: typeof event.project_id === 'string' ? event.project_id : '',
     daily: normalizeDaily(event.daily),
@@ -252,6 +280,16 @@ function normalizePayload(event: Record<string, unknown>): TokenUsageData {
       priced_cost_usd: nullableCost(totals.priced_cost_usd) ?? undefined,
       cost_complete: typeof totals.cost_complete === 'boolean' ? totals.cost_complete : undefined,
       unpriced_tokens: nonNegativeInt(totals.unpriced_tokens),
+      // [v1.0.34-M4]
+      compression_count: nonNegativeInt(totals.compression_count),
+      saved_chars: nonNegativeInt(totals.saved_chars),
+      compression_by_method: compressionByMethod,
+      context_usage_pct: contextPct,
+      // [v1.0.34-M4-v2] 瞬时组 + 投影累计
+      latest_compression_count: nullableNonNegInt(totals.latest_compression_count),
+      latest_saved_chars: nullableNonNegInt(totals.latest_saved_chars),
+      latest_projected_count: nullableNonNegInt(totals.latest_projected_count),
+      projected_count: nonNegativeInt(totals.projected_count),
     },
     by_agent: normalizeAgents(event.by_agent),
     by_model: normalizeModels(event.by_model),
@@ -381,6 +419,12 @@ export function bindTokenUsageSocket(socket: SocketAPI | null): void {
   }
   const state = useTokenUsageStore.getState();
   if (state.open && state.projectId && state.error) state.retry();
+}
+
+/** 测试钩子：重置请求序号与计时器（vitest 用例共享模块实例，防序号跨用例累积）。 */
+export function _resetTokenUsageSerial(): void {
+  requestSerial = 0;
+  clearRequestTimer();
 }
 
 /**

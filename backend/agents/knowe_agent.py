@@ -26,6 +26,19 @@ from knowe_core.provider_client import normalize_usage_buckets
 log = logging.getLogger("knowe.agent")
 
 
+def _context_usage_percent(projected_messages: list[dict[str, Any]]) -> float | None:
+    """投影产物估算 token ÷ 模型窗口 × 100；数据不足/异常时返回 None（前端显示 --）。"""
+    try:
+        from ..context_compressor import _projected_token_estimate, _token_budget
+        estimated = _projected_token_estimate(projected_messages)
+        budget = _token_budget(None)
+        if budget <= 0:
+            return None
+        return round(estimated / budget * 100, 2)
+    except Exception:
+        return None
+
+
 def _history_key(message: dict[str, Any]) -> tuple[Any, ...]:
     role = message.get("role")
     if role == "tool":
@@ -74,19 +87,24 @@ class _UsageTrackingClient:
         finally:
             try:
                 if raw_usage_frames:
-                    for frame in raw_usage_frames:
-                        buckets = normalize_usage_buckets(frame)
-                        if buckets is not None:
-                            self._collector.add({
-                                "input_tokens": buckets["cache_hit_input"] + buckets["cache_miss_input"],
-                                "output_tokens": buckets["output"],
-                                "prompt_cache_hit_tokens": buckets["cache_hit_input"],
-                                "prompt_cache_miss_tokens": buckets["cache_miss_input"],
-                            })
+                    # [v1.0.34-实测v2] 流式网关（DeepSeek 等）每个 chunk 都带 usage 帧，
+                    # 逐帧记账会把一次调用重复记 N 次（token jsonl 同秒多条相同记录）。
+                    # 只取最后一帧（完整累计值），一次调用恰一条。
+                    latest_frame = raw_usage_frames[-1]
+                    buckets = normalize_usage_buckets(latest_frame)
+                    if buckets is not None:
+                        self._collector.add({
+                            "input_tokens": buckets["cache_hit_input"] + buckets["cache_miss_input"],
+                            "output_tokens": buckets["output"],
+                            "prompt_cache_hit_tokens": buckets["cache_hit_input"],
+                            "prompt_cache_miss_tokens": buckets["cache_miss_input"],
+                        })
+                        log.warning("[usage-debug] add via frames: n_frames=%d latest=%r", len(raw_usage_frames), buckets)
                 else:
                     latest = extract_token_usage(usage_parts)
                     if latest is not None:
                         self._collector.add(latest)
+                        log.warning("[usage-debug] add via fallback")
             except Exception:
                 log.debug("provider usage collection failed", exc_info=True)
 
@@ -241,7 +259,15 @@ class KnoweAgent:
                 tool_complete_callback=self.tool_complete_callback,
                 tool_context={"agent_id": self.agent_id},
             )
-            projected_messages, projected_count = project_messages(self._history)
+            # [v1.0.34] M3 查询感知投影：开关开时传当前用户消息做 BM25 优先保留；
+            # 关时不传 query，行为与 v1.0.33 完全一致。
+            projected_messages, projected_count = project_messages(
+                self._history,
+                query=user_message if CONFIG.query_aware else None,
+            )
+            # [v1.0.34-M4] 上下文占用百分比：投影产物估算 token ÷ 模型窗口。
+            # 附在 result 私有字段，engine 落盘时消费（_persist_token_usage）。
+            context_usage_pct = _context_usage_percent(projected_messages)
             # [v1.0.19.4] ★ 把本回合用户附件并进最后一条 user 消息（当前回合）。
             #   只改这份投影副本；self._history 保持纯文本，附件不落盘、不逐回合重发。
             inject_into_last_user(projected_messages, attachments)
@@ -287,6 +313,7 @@ class KnoweAgent:
                     "tool_calls_executed": getattr(result, "tool_calls_executed", 0),
                     "steers_injected": getattr(result, "steers_injected", 0),
                     "projected_message_count": getattr(result, "projected_message_count", 0),
+                    "_context_usage_pct": context_usage_pct,  # [v1.0.34-M4] 私有遥测字段
                 }
             )
         except ProviderError as exc:

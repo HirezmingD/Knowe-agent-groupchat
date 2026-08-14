@@ -70,6 +70,7 @@ export const PROVIDERS: ProviderEntry[] = [
       'openai/gpt-5.4-mini',
       'google/gemini-3.1-pro-preview',
       'google/gemini-3.6-flash',
+      'x-ai/grok-4.6',
       'x-ai/grok-4.5',
       'deepseek/deepseek-v4-pro',
       'deepseek/deepseek-v4-flash',
@@ -213,6 +214,7 @@ export const PROVIDERS: ProviderEntry[] = [
     cheap: 'grok-4.20-0309-non-reasoning',
     models: [
       'grok-build-0.1',
+      'grok-4.6',
       'grok-4.5',
       'grok-4.3',
       'grok-4.20-0309-reasoning',

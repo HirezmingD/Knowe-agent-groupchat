@@ -10,6 +10,30 @@ Version line: **v0.1 (prototype) → v0.2 (React rewrite) → v1.0 (productizati
 
 ## v1.0.x — Productization
 
+### v1.0.34 (2026-08-14)
+
+**Token-saving mechanism (core)**
+- Tool-result stream compression + query-aware projection on by default (backend switches, invisible in UI)
+- Four-group controlled test (2026-08-14, real model, 10-round script): A (default dual-on) vs control — input -19.8%, cache-miss -18.7%, cost -17.8%; context peak 66.68% → 51.24%
+- Compression fired 14 times, saved 138,789 chars; compression is the main cost saver, projection adds stacking gain on top; projection alone shows no gain — the default config is already optimal
+- Zero quality loss: all four groups hit every key value (ERROR 1997 / WARN / PANIC / MODE / data anomalies / config check), task completion equivalent
+
+**Token panel & context card redesign**
+- Four-stat area + AI memory usage card (usage % / auto-compress / history prune), plain-language copy
+- Savings unit changed to "~X tokens" (front-end approximation, labeled "approx." to stay honest)
+- Panel bottom radius handed to the resize handle (no double-radius seam)
+
+**Billing & price table**
+- DeepSeek peak/off-peak pricing support (effective 8/17: peak 9:00-12:00 & 14:00-18:00 Beijing; off-peak = half of peak), rate auto-selected by request time
+- Grok 4.6 added to model list & price table (official <200K / ≥200K tiers)
+- Spent amounts frozen at write time: price-table updates never recalculate history (new tokens use new rates)
+
+**Fixes**
+- Fold detection fix: duplicate lines fold correctly after stripping line-number prefixes (`… N lines elided (knowe) …`), non-duplicate tails preserved
+- English-mode fixes: units (times/entries/approx/tokens) and large-number abbreviations (K/M/B/T) follow the UI language
+
+Version bumped to 1.0.34
+
 ### v1.0.33 (2026-08-12)
 - Pre-open-source release: About page links point to official website & public repo
 - Update source switched to GitHub Releases (provider: github, explicit owner/repo)

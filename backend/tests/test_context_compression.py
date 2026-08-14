@@ -159,6 +159,41 @@ def test_performance_thousands_of_messages() -> None:
     assert len(messages) > len(projected)
 
 
+def test_projection_is_deterministic_across_runs() -> None:
+    """M1 幂等契约：同输入两次投影，字节级一致。"""
+    messages = _long_history(exec_pairs=40)
+    first, first_count = cc.project_messages(messages)
+    second, second_count = cc.project_messages(messages)
+    assert first_count == second_count
+    assert first == second
+    # 深度序列化后逐字节一致（防"相等但字节不同"的幻影）
+    import json as _json
+
+    assert _json.dumps(first, ensure_ascii=False) == _json.dumps(second, ensure_ascii=False)
+
+
+def test_projection_is_idempotent_on_projected_output() -> None:
+    """M1 幂等契约：投影产物再投影，输出与首次投影字节级一致。"""
+    messages = _long_history(exec_pairs=40)
+    once, _ = cc.project_messages(messages)
+    twice, second_count = cc.project_messages(once)
+    assert second_count == 0  # 投影产物已低于触发条件，不应二次改写
+    assert twice == once
+    import json as _json
+
+    assert _json.dumps(twice, ensure_ascii=False) == _json.dumps(once, ensure_ascii=False)
+
+
+def test_projection_bytes_identical_with_default_config() -> None:
+    """M1 幂等契约：默认配置下同输入两次投影字节一致（覆盖 DEFAULT_CONFIG 路径）。"""
+    messages = _long_history(exec_pairs=80)
+    first, _ = cc.project_messages(messages, cc.DEFAULT_CONFIG)
+    second, _ = cc.project_messages(messages, cc.DEFAULT_CONFIG)
+    import json as _json
+
+    assert _json.dumps(first, ensure_ascii=False) == _json.dumps(second, ensure_ascii=False)
+
+
 def test_layer_classification() -> None:
     assert cc.classify_layer({"role": "user", "content": "写个登录页"}) == "L1_user"
     assert cc.classify_layer({

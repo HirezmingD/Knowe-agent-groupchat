@@ -297,6 +297,28 @@ def test_aggregate_by_agent_and_model():
     assert model_row["cache_miss_input"] == 90
 
 
+def test_aggregate_uses_persisted_price_freezing_history():
+    # [v1.0.34] 历史金额冻结：聚合优先用落盘价（写入时的价格），改价不重算历史
+    frozen = _record(_T0, hit=1_000_000, miss=1_000_000, output=1_000_000)
+    frozen["price_cny"] = 3.33   # 旧价落盘（任意值，仅验证不被当前价格表现算覆盖）
+    frozen["price_usd"] = 0.5
+    result = aggregate_token_usage([frozen])
+    t = result["totals"]
+    assert t["estimated_cost_cny"] == 3.33
+    assert t["estimated_cost_usd"] == 0.5
+    m = next(m for m in result["by_model"] if m["model"] == "kimi-k2.6")
+    assert m["estimated_cost_cny"] == 3.33
+    assert m["estimated_cost_usd"] == 0.5
+
+
+def test_aggregate_fallback_to_current_price_when_no_persisted():
+    # 无落盘价字段的旧格式记录 → 当前价格表现算兜底（kimi-k2.6 CNY 1.10/6.50/27.00）
+    rec = _record(_T0, hit=1_000_000, miss=1_000_000, output=1_000_000)
+    result = aggregate_token_usage([rec])
+    t = result["totals"]
+    assert t["estimated_cost_cny"] == round(1.10 + 6.50 + 27.00, 2)
+
+
 # ── estimate_cost：三档单价 ───────────────────────────────────────
 
 def test_estimate_cost_cny_three_tiers():

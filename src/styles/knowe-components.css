@@ -2496,7 +2496,7 @@ html.dark .md pre code .ln {
   display:flex;flex-direction:column;flex:1 1 auto;min-height:0;
   max-height:72vh;overflow-y:auto;
   box-sizing:border-box;background:var(--surface);
-  border:1px solid var(--hairline);border-radius:0 0 var(--r-lg) var(--r-lg);
+  border:1px solid var(--hairline);border-radius:0; /* [v1.0.34] 底部圆角让给拖拽条(.tk-resize)，避免双圆角上下拼接 */
   box-shadow:var(--shadow-2),var(--shadow-panel);color:var(--ink);
 }
 
@@ -2544,11 +2544,30 @@ html.dark .md pre code .ln {
 .tk-custom-btn.active {max-width:220px;overflow:hidden;text-overflow:ellipsis}
 .tk-caret {font-size:12px;opacity:.7}
 
-/* ── 统计卡 ×3 ── */
+/* ── 统计卡区：左半 2×2（请求|花费 上半、Token 下半居中）+ 右侧通栏上下文卡 ── */
 .tk-cards {
-  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-3);
+  display:grid;
+  grid-template-columns:minmax(0,0.62fr) minmax(0,0.62fr) minmax(0,1.2fr);
+  grid-template-rows:auto auto;
+  gap:var(--space-3);
   padding:var(--space-4) var(--space-4) 0;
 }
+.tk-stat-calls {grid-area:1 / 1;align-items:center;text-align:center}
+.tk-stat-calls .tk-card-label {text-align:center}
+.tk-stat-cost {grid-area:1 / 2;align-items:center;text-align:center}
+.tk-stat-cost .tk-card-label {text-align:center}
+.tk-stat-tokens {grid-area:2 / 1 / 2 / 3;justify-content:center;align-items:center;text-align:center}
+.tk-stat-tokens .tk-card-label {text-align:center}
+/* [v1.0.34-M4] 居中卡：value 必须撑满卡宽（width:100%），否则 align-items:center
+   收缩元素宽度 → 位数自适应字号反馈循环缩到 11px（实测 bug） */
+.tk-stat-calls .tk-card-value,
+.tk-stat-cost .tk-card-value,
+.tk-stat-tokens .tk-card-value {width:100%}
+/* [v1.0.34-M4-v2] 仅数字 25 下移与消费卡「两行块（主币+副币）」中心同线：
+   label 保持顶部对齐（距顶 12px 与消费金额一致）；25 原 yTop 30（中心 44），
+   消费两行块（¥30-58 + $60-76）中心 = (44+68)/2 = 56 → 25 yTop 42（margin-top 12px），中心同线 56 */
+.tk-stat-calls .tk-card-value {margin-top:12px}
+.tk-stat-context {grid-area:1 / 3 / 3 / 4;gap:4px}
 .tk-card {
   display:flex;flex-direction:column;gap:2px;min-width:0;
   padding:var(--space-3);border-radius:var(--r-md);background:var(--surface-2);
@@ -2566,7 +2585,7 @@ html.dark .md pre code .ln {
 }
 .tk-card-value.accent {color:var(--accent)}
 .tk-card-sub {
-  display:flex;align-items:center;flex-wrap:wrap;gap:4px;min-height:16px;
+  display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:4px;min-height:16px;
   font-size:13px;line-height:16px;color:var(--ink-3);font-variant-numeric:tabular-nums;
 }
 .tk-dot {width:3px;height:3px;border-radius:50%;background:var(--ink-3);opacity:.5}
@@ -2864,3 +2883,41 @@ html.dark .md pre code .ln {
 }
 /* [v1.0.23.5-r3] hover 覆盖层滑入后停在 translateX(0)：文字+箭头整体严格居中 */
 .effect-btn:hover .eb-cover { opacity: 1; }
+
+/* ── [v1.0.34-M4/M4-v2] 上下文占用卡（右侧通栏）：上半合并标题+占用率左对齐 / 下半纵向铺满 ── */
+.tk-context-top {
+  display:flex;align-items:baseline;justify-content:flex-start;gap:12px;min-width:0;
+}
+.tk-context-label {
+  font-size:16px;line-height:20px;font-weight:600;color:var(--ink-2);white-space:nowrap;
+}
+.tk-context-value {
+  font-size:32px;line-height:36px;font-weight:600;letter-spacing:-0.02em;
+  color:var(--accent);font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.tk-context-note {font-size:11px;line-height:14px;color:var(--ink-3);white-space:nowrap}
+/* 指标区：纵向堆叠，每个指标占整行宽（名+解释一行，数值一行大字号） */
+.tk-context-metrics {
+  margin-top:auto;display:flex;flex-direction:column;gap:var(--space-2);
+  border-top:1px solid var(--hairline);padding-top:var(--space-2);
+}
+.tk-context-metric {display:flex;flex-direction:column;gap:2px;min-width:0}
+.tk-context-metric-head {
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;min-width:0;
+}
+.tk-context-metric-name {font-size:13px;line-height:16px;color:var(--ink-3);white-space:nowrap}
+.tk-context-metric-hint {
+  font-size:13px;line-height:16px;color:var(--ink-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;
+}
+.tk-context-metric-row {
+  font-size:16px;line-height:22px;color:var(--ink-1);
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tk-context-metric-row b {font-weight:600;color:var(--ink-2)}
+.tk-context-metric-row .tk-ctx-num {font-weight:600;color:var(--accent)}
+.tk-ctx-dot {color:var(--ink-3);margin:0 6px}
+.tk-context-empty {
+  flex:1;display:flex;align-items:center;justify-content:center;
+  color:var(--ink-3);opacity:.6;font-size:13px;
+}

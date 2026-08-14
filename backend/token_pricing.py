@@ -16,11 +16,18 @@ selected by per-turn input total in ``estimate_cost``; the ``_PRICING`` entry
 keeps the default (first) tier for display.  Same-model cross-provider price
 conflicts (e.g. reseller CNY rates on Bailian) resolve to the official direct
 rate.  See 审计_M2价格表落地差距.md and PRD FR2.
+
+DeepSeek 峰谷定价 (2026-08-14 采集, 官方 2026-08-17 生效): 高峰时段
+(北京 9:00-12:00 / 14:00-18:00 = UTC 01:00-04:00 / 06:00-10:00) 用
+``_PEAK_RATES`` 价, 其余时段用 ``_RAW`` 内空闲价.  ``get_model_pricing`` /
+``estimate_cost`` / ``pricing_payload`` 按调用时刻自动选档 (可选 ``now``
+参数注入固定时间供测试).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Mapping
 
@@ -127,8 +134,11 @@ _RAW: dict[str, dict[str, dict[str, tuple[float | None, float | None, float | No
         # k2-thinking-turbo / k2-turbo-preview / k2-0905-preview
     },
     "deepseek": {
-        "deepseek-v4-pro":  {"CNY": (0.025, 3.00, 6.00), "USD": (0.003625, 0.435, 0.87)},
-        "deepseek-v4-flash": {"CNY": (0.02, 1.00, 2.00), "USD": (0.0028, 0.14, 0.28)},
+        # [2026-08-14] 官方 2026-08-17 起峰谷定价，此处存空闲档（高峰=空闲×2）：
+        # 高峰档见 _PEAK_RATES，get_model_pricing 按请求时刻自动选档。
+        # 旧价（8/17 前）留档：flash 0.02/1.00/2.00、pro 0.025/3.00/6.00（CNY）。
+        "deepseek-v4-pro":  {"CNY": (0.15, 4.50, 13.50), "USD": (0.022, 0.66, 1.98)},
+        "deepseek-v4-flash": {"CNY": (0.05, 1.50, 4.50), "USD": (0.007, 0.22, 0.66)},
     },
     "alibaba": {
         # CNY = 百炼促销价（当前支付价）；USD = Qwen marketplace 区间取下沿（D5）
@@ -164,6 +174,7 @@ _RAW: dict[str, dict[str, dict[str, tuple[float | None, float | None, float | No
     },
     "xai": {
         "grok-build-0.1":             {"USD": (0.20, 1.00, 2.00)},  # 长短上下文分档
+        "grok-4.6":                   {"USD": (0.50, 2.00, 6.00)},  # [2026-08-14] 官方 <200K 档；分档见 _TIERS
         "grok-4.5":                   {"USD": (0.30, 2.00, 6.00)},
         "grok-4.3":                   {"USD": (0.20, 1.25, 2.50)},
         "grok-4.20-0309-reasoning":   {"USD": (0.20, 1.25, 2.50)},
@@ -192,6 +203,8 @@ _RAW: dict[str, dict[str, dict[str, tuple[float | None, float | None, float | No
         "x-ai/grok-4.5":                    {"USD": (0.30, 2.00, 6.00)},
         "deepseek/deepseek-v4-pro":         {"USD": (0.0036, 0.435, 0.87)},
         "deepseek/deepseek-v4-flash":       {"USD": (0.028, 0.14, 0.28)},
+        "x-ai/grok-4.6":                    {"USD": (0.50, 2.00, 6.00)},  # [2026-08-14] OR 实时 $2/$6 与官方一致；缓存取官方 0.50
+        "x-ai/grok-4.5":                    {"USD": (0.30, 2.00, 6.00)},
         "qwen/qwen3.8-max":                 {"USD": (0.40, 2.00, 6.00)},   # [v1.0.24.2] OpenRouter 2026-08-06 实时：$2/$6 per M，缓存=输入×0.2
         "qwen/qwen3.7-max":                 {"USD": (0.295, 1.475, 4.425)},
         "moonshotai/kimi-k3":               {"USD": (0.30, 3.00, 15.00)},
@@ -273,6 +286,8 @@ _TIERS: dict[str, dict[str, tuple[_Tier, ...]]] = {
                             _Tier(None, None, 0.80, 2.00, 8.00))},
     "grok-build-0.1": {"USD": (_Tier(200_000, None, 0.20, 1.00, 2.00),
                                _Tier(None, None, 0.40, 2.00, 4.00))},
+    "grok-4.6": {"USD": (_Tier(200_000, None, 0.50, 2.00, 6.00),
+                         _Tier(None, None, 1.00, 4.00, 12.00))},
     "grok-4.5": {"USD": (_Tier(200_000, None, 0.30, 2.00, 6.00),
                          _Tier(None, None, 0.60, 4.00, 12.00))},
     "grok-4.3": {"USD": (_Tier(200_000, None, 0.20, 1.25, 2.50),
@@ -280,6 +295,22 @@ _TIERS: dict[str, dict[str, tuple[_Tier, ...]]] = {
     "gemini-3.1-pro-preview": {"USD": (_Tier(200_000, None, 0.20, 2.00, 12.00),
                                        _Tier(None, None, 0.40, 4.00, 18.00))},
 }
+
+# ── 峰谷档（DeepSeek 2026-08-17 生效；高峰时段价，空闲=高峰一半） ──
+# 官方口径：高峰 = 北京 9:00-12:00 / 14:00-18:00（UTC 01:00-04:00 / 06:00-10:00）。
+_PEAK_RATES: dict[str, dict[str, tuple[float, float, float]]] = {
+    "deepseek-v4-flash": {"CNY": (0.10, 3.00, 9.00), "USD": (0.014, 0.44, 1.32)},
+    "deepseek-v4-pro":   {"CNY": (0.30, 9.00, 27.00), "USD": (0.044, 1.32, 3.96)},
+}
+
+
+def _is_peak_period(dt: datetime | None = None) -> bool:
+    """DeepSeek 高峰时段判定（UTC 01:00-04:00 / 06:00-10:00）。"""
+    now = dt if dt is not None else datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    hour = now.astimezone(timezone.utc).hour
+    return 1 <= hour < 4 or 6 <= hour < 10
 
 # ── 别名映射（目录 ID → 官方价键，opencode-zen/copilot 同源取价） ──
 _ALIAS: dict[str, str] = {
@@ -316,10 +347,14 @@ MODEL_PRICING: Final[Mapping[str, Mapping[str, ModelPricing]]] = MappingProxyTyp
 )
 
 
-def get_model_pricing(model: str, currency: str = "CNY") -> ModelPricing | None:
+def get_model_pricing(
+    model: str, currency: str = "CNY", now: datetime | None = None,
+) -> ModelPricing | None:
     """Return an exact model entry for one currency; unknown *entry* and absent model differ.
 
     Falls back through the alias table (目录短名 → 官方价键) before giving up.
+    Models in ``_PEAK_RATES`` return the peak-hour rates when ``now`` falls in a
+    peak window (defaults to the current UTC time).
     """
     if not isinstance(model, str):
         return None
@@ -331,7 +366,19 @@ def get_model_pricing(model: str, currency: str = "CNY") -> ModelPricing | None:
             entries = MODEL_PRICING.get(alias)
     if not entries:
         return None
-    return entries.get(currency.upper())
+    pricing = entries.get(currency.upper())
+    if pricing is None:
+        return None
+    peak = _PEAK_RATES.get(key)
+    if peak and _is_peak_period(now):
+        rates = peak.get(currency.upper())
+        if rates:
+            hit, miss, out_rate = rates
+            pricing = ModelPricing(
+                miss, out_rate, pricing.source + "（高峰档）",
+                currency=pricing.currency, cache_hit_input_cost_per_1M=hit,
+            )
+    return pricing
 
 
 def estimate_cost(
@@ -341,6 +388,7 @@ def estimate_cost(
     cache_miss_input: int = 0,
     output: int = 0,
     currency: str = "CNY",
+    now: datetime | None = None,
 ) -> float | None:
     """Estimate one call's cost, or ``None`` when exact pricing is unavailable.
 
@@ -348,8 +396,9 @@ def estimate_cost(
     ``_TIERS``; the first tier whose limits fit wins, otherwise the last tier.
     Models without a cache tier (``cache_hit_input_cost_per_1M is None``) are
     billed at the standard input rate for every input token.
+    ``now`` pins the peak/off-peak window for DeepSeek (defaults to now).
     """
-    pricing = get_model_pricing(model, currency)
+    pricing = get_model_pricing(model, currency, now=now)
     if pricing is None or not pricing.known:
         return None
     try:
@@ -401,9 +450,11 @@ def estimate_cost_usd(
     )
 
 
-def pricing_payload(model: str, currency: str = "CNY") -> dict[str, object]:
+def pricing_payload(
+    model: str, currency: str = "CNY", now: datetime | None = None,
+) -> dict[str, object]:
     """JSON-safe metadata for the frontend's model/pricing section."""
-    pricing = get_model_pricing(model, currency)
+    pricing = get_model_pricing(model, currency, now=now)
     if pricing is None:
         return {
             "model": model,
@@ -413,6 +464,7 @@ def pricing_payload(model: str, currency: str = "CNY") -> dict[str, object]:
             "cache_hit_input_cost_per_1M": None,
             "currency": currency,
             "source": "unknown",
+            "rate_period": None,
         }
     return {
         "model": model,
@@ -422,4 +474,5 @@ def pricing_payload(model: str, currency: str = "CNY") -> dict[str, object]:
         "cache_hit_input_cost_per_1M": pricing.cache_hit_input_cost_per_1M,
         "currency": pricing.currency,
         "source": pricing.source,
+        "rate_period": "peak" if _is_peak_period(now) else "off_peak",
     }

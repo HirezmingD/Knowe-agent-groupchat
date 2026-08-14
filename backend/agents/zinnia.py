@@ -783,7 +783,12 @@ class ZinniaAgent:
             dict(message) for message in turn.history if isinstance(message, dict)
         ]
         authoritative.append({"role": "user", "content": turn.content})
-        projected, _ = project_messages(authoritative)
+        # [v1.0.34] M3 查询感知投影：开关开时传当前用户消息做 BM25 优先保留；
+        # 关时不传 query，行为与 v1.0.33 完全一致。
+        projected, _ = project_messages(
+            authoritative,
+            query=turn.content if CONFIG.query_aware else None,
+        )
         # [v1.0.19.4] 附件注入：投影后当前回合是尾部 verbatim 的最后一条 user；
         #   把文本+附件块合成多模态数组替换它。历史/权威副本保持纯文本。
         inject_into_last_user(projected, turn.attachments)
