@@ -10,6 +10,26 @@ Version line: **v0.1 (prototype) → v0.2 (React rewrite) → v1.0 (productizati
 
 ## v1.0.x — Productization
 
+### v1.0.35 (2026-08-14)
+
+**Approval-card misplacement — root-cause fix (core)**
+- Relay animation state machine consolidated into a single settle gate: every exit path atomically restores DOM styles, height table, and animation state — eliminating protect-lock leakage and render-phase side effects
+- Card positioning no longer depends on the animation staying alive (yield check now uses the state machine); cards stay correctly positioned even when the animation is interrupted (switching groups / backgrounding)
+- No more card misplaced to the top / large blank gap at the bottom under multi-group concurrent switching
+
+**Stop-action streaming bubble residue fix**
+- Draining in-flight stream broadcasts on stop so "reasoning done" is always the last event; late reasoning deltas no longer re-create the "AI reasoning..." bubble
+- Cancellation now also cancels the orphaned LLM streaming task, so no more late deltas
+- Frontend adds scope-level liveness check on late/out-of-order reasoning deltas — drops them for already-idle workers
+
+**Startup unread-message fix**
+- Read watermark persisted and restored across restart: unread messages survive restart, read ones stay read
+- Frontend reports the read watermark on group switch / window focus / mark-as-read; backend advances and persists it
+- Unread semantics unified to "message count" (front and back now share one ledger), eliminating the "event sequence vs message count" mismatch
+- First launch after upgrade for existing users: history counts as read, no more flooding all history as unread
+
+Version bumped to 1.0.35
+
 ### v1.0.34 (2026-08-14)
 
 **Token-saving mechanism (core)**

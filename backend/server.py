@@ -998,7 +998,7 @@ class KnoweServer:
             "project_id": project_id,
             "project_name": proj.name,
             # muted / folded 是全局静默：旧客户端只认识 unread_count，也不能被它点亮。
-            "unread_count": 0 if state["muted"] or state["folded"] else proj.unread_count,
+            "unread_count": 0 if state["muted"] or state["folded"] else self.hub.unread_count(project_id),
         }
         known_dir = self.project_dirs.get(project_id)
         if known_dir:
@@ -2450,7 +2450,7 @@ class KnoweServer:
                 0 if (
                     self._conversation_state(project_id)["muted"]
                     or self._conversation_state(project_id)["folded"]
-                ) else proj.unread_count
+                ) else self.hub.unread_count(project_id)
             ),
         }
         # [v1.0.24.4] 附权威活动账本（全量）：前端重连回放后以它校准花名册忙碌状态——

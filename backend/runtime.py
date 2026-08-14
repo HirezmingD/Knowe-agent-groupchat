@@ -905,6 +905,14 @@ class WorkerRuntime:
                 raise asyncio.TimeoutError
             return await operation
         finally:
+            # [v1.0.35.2] 取消中断时 operation（model.step 的 LLM 流式调用）未被上面的
+            #   _RuntimeCancelled/Timeout 分支 cancel——它变成孤儿 task 继续推 LLM 流式，
+            #   reasoning_relay 还在 fire-and-forget 发 reasoning_delta → 晚到、气泡残留。
+            #   这里补 cancel，让 LLM 流式立即停止，不再产生晚到增量。
+            if not operation.done():
+                operation.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await operation
             cancelled.cancel()
             if timer is not None:
                 timer.cancel()

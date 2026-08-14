@@ -56,7 +56,7 @@ import { PLATFORM_PROJECT_ID } from '../store/avatar';
 import SystemLine from './SystemLine';
 import ApprovalCard from './ApprovalCard';
 import { itemKeyOf } from '../store/state';
-import { buildRowIndex, HeightStore, computeWindow, shouldRenderRow, type WindowRange } from './virtualList';
+import { buildRowIndex, HeightStore, computeWindow, shouldRenderRow, type WindowRange, type VRow } from './virtualList';
 import { loadSkeleton, saveSkeleton } from '../store/skeletonCache';   // [v1.0.23.6] 骨架持久化
 import { useFavoritesStore } from '../store/favorites';
 import {
@@ -71,6 +71,55 @@ import { useDirectoryEntry } from '../store/directoryRecovery';
 import { useRecordsStore } from '../store/records';
 import { useTokenUsageStore } from '../store/tokenUsage';
 import { shouldShowDivider, formatDividerLabel } from '../utils/messageTime';
+
+/** [v1.0.35] relay 接力对信息（气泡行 + 卡片行的 ik 与行号）。 */
+type RelayPair = {
+  bubbleIk: string;      // 气泡行 ik
+  bubbleRowIdx: number;  // 气泡行行号（HeightStore measure 用）
+  cardIk: string;        // 卡片行 ik
+  cardRowIdx: number;    // 卡片行行号（HeightStore measure 用）
+};
+
+/**
+ * [v1.0.35] relay 状态机：两态收敛（原 relayInfoRef + relayStartedRef + relayInfo.done
+ *   三套散落标记的合并）。idle = 无动画；running = 动画播放中（携带接力对信息）。
+ *   running → idle 唯一路径 = settleRelay 闸口（见下），杜绝「清理散落 / 漏 unprotect」。
+ */
+type RelayState =
+  | { state: 'idle' }
+  | ({ state: 'running' } & RelayPair);
+
+/**
+ * [v1.0.35] relay 接力对纯检测函数（模块级，render 与 effect 共用，无副作用）。
+ *   返回「气泡行 + 下一可见审批卡行」的接力对，无候选则 null。
+ *   判定与原渲染循环逻辑一致：气泡行 = agent + 非流式 + 无正文 + 有推理；
+ *   下一可见行 = 审批卡且尚未入册（新卡）。
+ */
+function findRelayPair(
+  rows: VRow[],
+  items: Item[],
+  seenIks: Set<string>,
+): RelayPair | null {
+  for (let j = 0; j < rows.length; j++) {
+    const row = rows[j]!;
+    const it = row.itemIndex >= 0 ? items[row.itemIndex] : undefined;
+    if (!it || it.kind !== 'agent') continue;
+    if (it.streaming) continue;
+    if (it.text && it.text.trim()) continue;
+    if (!it.reasoning) continue;
+    const nextRow = row.nextVisible >= 0 ? rows[row.nextVisible] : undefined;
+    const nextIt = nextRow && nextRow.itemIndex >= 0 ? items[nextRow.itemIndex] : undefined;
+    if (!nextRow || !nextIt || nextIt.kind !== 'approval') continue;
+    if (seenIks.has(nextRow.ik)) continue;
+    return {
+      bubbleIk: row.ik,
+      bubbleRowIdx: j,
+      cardIk: nextRow.ik,
+      cardRowIdx: row.nextVisible,
+    };
+  }
+  return null;
+}
 
 function senderKey(it: Item | undefined): string | null {
   if (!it) return null;
@@ -217,9 +266,9 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
       // 卸载/销毁前最终写回一次（防丢最后一次滚动位置）
       flushSkeleton();
       if (skeletonTimerRef.current) window.clearTimeout(skeletonTimerRef.current);
-      // [v1.0.24.4-r10] 清理接力动画状态（会话销毁时防泄漏）
-      relayInfoRef.current = null;
-      relayStartedRef.current = false;
+      // [v1.0.35] 清理接力动画状态（会话销毁时防泄漏）
+      relayRef.current = { state: 'idle' };
+      relayAnimRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -241,20 +290,12 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
   const wheelCheckTimerRef = useRef(0);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
-  // [v1.0.24.4-r10/r14] 派卡接力：当前接力动画信息。
-  //   检测到「新审批卡的前一个 item 是刚定格的推理气泡」→ 建立接力对，
-  //   气泡行（原气泡）收起 + 卡片行（原卡片）展开，两行独立渲染，
-  //   relaySync effect 的 rAF 逐帧驱动两行高度并同步 HeightStore（零错位）。
-  const relayInfoRef = useRef<{
-    bubbleIk: string;      // 气泡行 ik
-    bubbleRowIdx: number;  // 气泡行行号（HeightStore measure 用）
-    cardIk: string;        // 卡片行 ik
-    cardRowIdx: number;    // 卡片行行号（HeightStore measure 用）
-    done: boolean;         // 动画是否已播完（避免重复建对）
-  } | null>(null);
-  // [v1.0.24.4-r14] relaySync 启动锁：relay 建立后首个 effect 帧启动 rAF 驱动，
-  //   之后每帧 setTotalH 触发 effect 但 started 已 true → 不重复启动。
-  const relayStartedRef = useRef(false);
+  // [v1.0.35] relay 状态机：两态（idle/running）。running 携带接力对信息。
+  //   running → idle 唯一路径 = settleRelay 闸口（见下方 effect 之前的定义），
+  //   从结构上杜绝「清理散落 / 漏 unprotect」。
+  const relayRef = useRef<RelayState>({ state: 'idle' });
+  // [v1.0.35] relay 动画 rAF 循环是否在跑（防 effect 因 rows 重跑时重复启动；与 relay 状态正交）。
+  const relayAnimRef = useRef(false);
   const rowElsRef = useRef(new Map<string, HTMLElement>());
   /*
    * [v1.0.23.6] 首次挂载快照：初始消息全部视为「历史」→ vrow 加 no-anim，
@@ -288,6 +329,77 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, active]);
+
+  // [v1.0.35] relay 统一闸口：唯一能终结 relay 动画的入口（running → idle）。
+  //   五步原子完成，任何退出路径（正常落定/超时/回滚）都走它，杜绝「清理散落 / 漏 unprotect」。
+  //   restoreStyle：动画是否已写过 DOM 样式（正常落定/超时 = true，回滚 = false）。
+  //   气泡行 inline 永不还原——保持 0 高 + hidden，等幽灵守卫卸载（r16 教训：清了会弹回
+  //   自然高，RO 在卸载窗口把脏高度写回前缀和 → 永久空白）。卡片行照常清除。
+  const settleRelay = (restoreStyle: boolean): void => {
+    const r = relayRef.current;
+    if (r.state !== 'running') return;   // 幂等
+    const cEl = rowElsRef.current.get(r.cardIk);
+    if (restoreStyle && cEl) {
+      cEl.style.height = '';
+      cEl.style.overflow = '';
+      cEl.style.top = '';
+    }
+    heightStore.measure(r.bubbleIk, r.bubbleRowIdx, 0);
+    heightStore.measure(r.cardIk, r.cardRowIdx, cEl ? cEl.scrollHeight : 0);
+    heightStore.unprotect(r.bubbleIk);
+    heightStore.unprotect(r.cardIk);
+    relayRef.current = { state: 'idle' };
+    relayAnimRef.current = false;
+    setTotalH(heightStore.totalHeight);
+    forceRender();
+  };
+
+  // [v1.0.35] relay 动画启动：写首帧样式 + measure + 注册超时兜底 + 启动 rAF 循环。
+  //   循环每帧校验「自己这个接力对是否仍是 running」——中途被 settle（或换新对）即停，
+  //   避免旧循环在 settle 后把脏高度写回前缀和。
+  const startRelay = (pair: RelayPair, bEl: HTMLElement, cEl: HTMLElement): void => {
+    relayAnimRef.current = true;
+    const H = bEl.offsetHeight || 64;
+    const C = cEl.scrollHeight || 400;
+    // 首帧预置（无跳变）：气泡保持 H、卡片 0；top 同步（渲染循环不写 relay 行 top）
+    bEl.style.overflow = 'hidden';
+    cEl.style.overflow = 'hidden';
+    bEl.style.height = `${H}px`;
+    cEl.style.height = '0px';
+    heightStore.measure(pair.bubbleIk, pair.bubbleRowIdx, H);
+    heightStore.measure(pair.cardIk, pair.cardRowIdx, 0);
+    // [v1.0.24.6-P3] 气泡行 top 动画期间恒定（前面行动画中不动），只写一次；卡片行 top 每帧跟。
+    bEl.style.top = `${heightStore.topOf(pair.bubbleRowIdx)}px`;
+    cEl.style.top = `${heightStore.topOf(pair.cardRowIdx)}px`;
+    setTotalH(heightStore.totalHeight);
+    // 超时兜底：1.5s 无论 rAF 是否播完都落定（settleRelay 幂等，已落定则空操作）。
+    window.setTimeout(() => settleRelay(true), 1500);
+    const T0 = performance.now();
+    const TOTAL = 1.0;   // 收起 1s；展开 0.8s 并行（用户定参）
+    const loop = (now: number): void => {
+      const cur = relayRef.current;
+      // 自己这个接力对已不在 running（被 settle 或换新对）→ 停止，不再 measure
+      if (cur.state !== 'running' || cur.cardIk !== pair.cardIk) return;
+      const t = Math.min((now - T0) / 1000, TOTAL);
+      const bt = Math.min(t / 1.0, 1);
+      const ct = Math.min(t / 0.8, 1);
+      const bh = H * (1 - easeCubic(bt));
+      const ch = C * easeCubic(ct);
+      // 同帧「算高→measure（更新前缀和）→写 top」——绘制时 DOM 高度与位置必然一致
+      heightStore.measure(pair.bubbleIk, pair.bubbleRowIdx, bh);
+      heightStore.measure(pair.cardIk, pair.cardRowIdx, ch);
+      bEl.style.height = `${bh}px`;
+      cEl.style.height = `${ch}px`;
+      cEl.style.top = `${heightStore.topOf(pair.cardRowIdx)}px`;
+      setTotalH(heightStore.totalHeight);
+      if (t < TOTAL) {
+        requestAnimationFrame(loop);
+      } else {
+        settleRelay(true);
+      }
+    };
+    requestAnimationFrame(loop);
+  };
 
   const roRef = useRef<ResizeObserver | null>(null);
 
@@ -400,9 +512,9 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
         // [v1.0.24.4-r11] relay 动画期间跳过：气泡行 vrow 的 offsetHeight =
         //   RelayMorph 总高（气泡层 bh + 卡片层 ch），RO 写入气泡行会让它与
         //   onFrame 每帧竞争 → 总高度 ±卡片高 交替跳变（白色空白/卡片跳动根因）。
-        //   这两行由 rAF 独占驱动，落定后 relayInfo 清空、RO 恢复测量。
-        const ri = relayInfoRef.current;
-        if (ri && (ik === ri.bubbleIk || ri.cardIk === ik)) continue;
+        //   这两行由 rAF 独占驱动，落定后 relayRef 回 idle、RO 恢复测量。
+        const rr = relayRef.current;
+        if (rr.state === 'running' && (ik === rr.bubbleIk || rr.cardIk === ik)) continue;
         // [v1.0.24.4-r16] 幽灵行永不测量：幽灵行不渲染，任何实测值必为过期污染。
         //   实锤竞态：relay 落定瞬间气泡行 inline 清空 → 高度弹回自然值，RO 在
         //   relayInfo 已清空、元素未卸载的窗口把 317 写回前缀和 → 卡片上方永久空白。
@@ -437,8 +549,8 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
       ro.observe(el);
       const idx = parseInt(el.dataset.index ?? '-1', 10);
       // [v1.0.24.4-r11] 同 RO 回调：relay 行跳过主动测量（rAF 独占，避免竞争跳变）
-      const ri = relayInfoRef.current;
-      if (ri && (ik === ri.bubbleIk || ik === ri.cardIk)) continue;
+      const rr = relayRef.current;
+      if (rr.state === 'running' && (ik === rr.bubbleIk || rr.cardIk === ik)) continue;
       // [v1.0.24.4-r16] 同 RO 回调：幽灵行永不测量（任何实测值必为过期污染）
       const rowAt = rowsRef.current[idx];
       if (rowAt && rowAt.ghost) continue;
@@ -450,145 +562,39 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
     if (changed) setTotalH(heightStoreRef.current!.totalHeight);
   }, [win, rows, active]);
 
-  // [v1.0.24.4-r14] 派卡接力同步器：relay 建立后启动 rAF，逐帧驱动气泡行（H→0）与
-  //   卡片行（0→C）高度 + 同步 HeightStore。useLayoutEffect 在浏览器绘制前执行 →
-  //   首帧「算高度→写 DOM→measure→布局」完成后再绘制，无中间帧闪烁/错位（零错位）。
-  //   依赖 [rows]：relay 建立帧（新审批卡加入 items → rows 重建）提交后启动
-  //   （relayStartedRef 防重入；rAF 循环自驱，不依赖 effect 重跑）。
+  // [v1.0.35] relay 状态机驱动：idle 时检测候选并正式建立（running），running 时启动 rAF。
+  //   建立（写 relayRef + protect）从 render 移到本 effect——concurrent render 丢弃不再残留挂起状态
+  //   （缺陷 B 根治）。依赖 [rows, active]：候选随行变化重检测，切群/切回时收敛或启动。
   useLayoutEffect(() => {
-    const ri = relayInfoRef.current;
-    if (!ri || ri.done) return;
+    const r = relayRef.current;
+    if (r.state === 'running') {
+      // 动画已在跑 → 不重复启动（rAF 自驱，1s 后 settle）
+      if (relayAnimRef.current) return;
+      // 已建立但动画未启动 → 校验启动条件，不满足则回滚（settleRelay 幂等、原子）
+      if (!active) { settleRelay(false); return; }
+      const els = rowElsRef.current;
+      const bEl = els.get(r.bubbleIk);
+      const cEl = els.get(r.cardIk);
+      if (!bEl || !cEl) { settleRelay(false); return; }
+      startRelay(r, bEl, cEl);
+      return;
+    }
+    // idle → 检测候选，正式建立（running）+ protect + 启动 rAF
+    if (!active) return;
+    const seen = mountSeenRef.current;
+    if (!seen) return;
+    const pair = findRelayPair(rows, deferredItems, seen);
+    if (!pair) return;
+    relayRef.current = { state: 'running', ...pair };
+    heightStore.protect(pair.bubbleIk);
+    heightStore.protect(pair.cardIk);
     const els = rowElsRef.current;
-    // [v1.0.24.7-P0-2-防线4] 兜底**先注册**（在任何提前 return 之前）：relay 建立后
-    //   1.5s 无论 rAF 是否启动，强制落定。旧实现把 setTimeout 放在 relayStartedRef
-    //   检查之后——切群（active 翻转）建立的 relay 若 effect 因依赖 [rows] 不重跑，
-    //   rAF 不启动且兜底也不注册 → relayInfo 永久挂着 → 渲染循环 fallback 用幽灵行
-    //   0 高算 top → 卡片与气泡同 top 重叠（多群并发逐个切群 4 群全中实锤）。
-    //   动画正常播完时 relayInfo 已清空，定时器无害（下面对 null 早退）。清理函数
-    //   不取消：本 effect 因 rows 变化重跑时旧定时器由 closure 持有，若取消可能把
-    //   新动画的兜底误杀。
-    window.setTimeout(() => {
-      const ri2 = relayInfoRef.current;
-      if (!ri2 || ri2.done) { relayStartedRef.current = false; return; }
-      // 同 rAF 落定路径：measure 终值 + 清 relay 状态 + 恢复 overflow/top 交还 React
-      const bEl2 = els.get(ri2.bubbleIk);
-      const cEl2 = els.get(ri2.cardIk);
-      if (bEl2) { bEl2.style.overflow = ''; }
-      if (cEl2) {
-        cEl2.style.overflow = '';
-        cEl2.style.height = '';
-        cEl2.style.top = '';
-      }
-      heightStore.measure(ri2.bubbleIk, ri2.bubbleRowIdx, 0);
-      heightStore.measure(ri2.cardIk, ri2.cardRowIdx, bEl2 ? bEl2.offsetHeight : cEl2 ? cEl2.scrollHeight : 0);
-      setTotalH(heightStore.totalHeight);
-      ri2.done = true;
-      relayInfoRef.current = null;
-      relayStartedRef.current = false;
-      heightStore.unprotect(ri2.bubbleIk);
-      heightStore.unprotect(ri2.cardIk);
-      forceRender();
-    }, 1500);
-    // [v1.0.24.4-r14] relayStartedRef 防重入：rAF 已在跑 → 不重复启动（动画自驱）。
-    if (relayStartedRef.current) return;
-    // [v1.0.24.7-P0-1-防线2] 启动失败回滚（含 active 翻转路径）：relay 对已建立（渲染阶段
-    //   active=true 才建），但本 effect 执行时已不满足启动条件（active 变 false / 元素未
-    //   就绪）→ 不再静默放弃（旧行为 = 永久挂起：relayInfo 永远指向这两行 → 渲染循环不写
-    //   top → 卡片叠到消息流最上方）。回滚 = 清空 relayInfo + 解除保护 + 强制重渲染 →
-    //   React 恢复正常写 top（位置保底正确，只是没有动画）。
-    //   ⚠️ [v1.0.24.6-P0] 原「if (!active) return」只停动画不停状态——relay 建立后切走群，
-    //   状态永远挂着，切回也不恢复（effect 依赖 [rows] 不含 active）。这里统一走回滚。
-    //   ⚠️ [v1.0.24.7-P0-2] 依赖加 active：切群（active 翻转）时本 effect 必须重跑——
-    //   切回群时 relay 在渲染阶段重建（active 变 true），若依赖只有 [rows]（引用没变）
-    //   effect 不重跑 → rAF 永不启动 → 上面的兜底是最后防线（1.5s 落定，无动画但有
-    //   正确位置）。依赖加 active 后切回立即启动 rAF → 动画照常。
-    if (!active) {
-      relayStartedRef.current = false;
-      relayInfoRef.current = null;
-      heightStore.unprotect(ri.bubbleIk);
-      heightStore.unprotect(ri.cardIk);
-      forceRender();
-      return;
-    }
-    relayStartedRef.current = true;
-    const bubbleEl = els.get(ri.bubbleIk);
-    const cardEl = els.get(ri.cardIk);
-    // [v1.0.24.7-P0-1-防线2] 元素未就绪同样回滚（不再静默 return）
-    if (!bubbleEl || !cardEl) {
-      relayStartedRef.current = false;
-      relayInfoRef.current = null;
-      heightStore.unprotect(ri.bubbleIk);
-      heightStore.unprotect(ri.cardIk);
-      forceRender();
-      return;
-    }
-    // [v1.0.24.7-P0-2] 落定超时兜底已提前到 effect 开头注册（防线4）——旧防线3 删除。
-    // 初始高度：气泡行当前实际高（推理面板展开态）；卡片行完整内容高（scrollHeight
-    //   不受 vrow 高度压缩影响——内容已渲染，只是被 overflow hidden 裁切）。
-    const H = bubbleEl.offsetHeight || 64;
-    const C = cardEl.scrollHeight || 400;
-    // 首帧预置（无跳变）：气泡保持 H、卡片 0；top 同步（渲染循环不写 relay 行 top）
-    bubbleEl.style.overflow = 'hidden';
-    cardEl.style.overflow = 'hidden';
-    bubbleEl.style.height = `${H}px`;
-    cardEl.style.height = '0px';
-    heightStore.measure(ri.bubbleIk, ri.bubbleRowIdx, H);
-    heightStore.measure(ri.cardIk, ri.cardRowIdx, 0);
-    // [v1.0.24.6-P3] 气泡行 top 动画期间恒定（前缀和只受前面行影响，前面行动画中
-    //   不动）→ 只写一次，loop 不再重复写（每帧省 1 次 style 写）。
-    bubbleEl.style.top = `${heightStore.topOf(ri.bubbleRowIdx)}px`;
-    cardEl.style.top = `${heightStore.topOf(ri.cardRowIdx)}px`;
-    setTotalH(heightStore.totalHeight);
-    const T0 = performance.now();
-    const TOTAL = 1.0;   // 收起 1s；展开 0.8s 并行（用户定参）
-    const loop = (now: number): void => {
-      const t = Math.min((now - T0) / 1000, TOTAL);
-      const bt = Math.min(t / 1.0, 1);
-      const ct = Math.min(t / 0.8, 1);
-      const bh = H * (1 - easeCubic(bt));
-      const ch = C * easeCubic(ct);
-      // 同帧「算高→measure（更新前缀和）→写 top」——绘制时 DOM 高度与位置必然一致
-      heightStore.measure(ri.bubbleIk, ri.bubbleRowIdx, bh);
-      heightStore.measure(ri.cardIk, ri.cardRowIdx, ch);
-      bubbleEl.style.height = `${bh}px`;
-      cardEl.style.height = `${ch}px`;
-      // [v1.0.24.4-r14] top 由 rAF 独占写（React 渲染滞后一帧 → 瞬态重叠的根因）
-      // [v1.0.24.6-P3] 气泡 top 恒定不再重写；卡片 top 每帧跟（前缀和随 bh 变）
-      cardEl.style.top = `${heightStore.topOf(ri.cardRowIdx)}px`;
-      setTotalH(heightStore.totalHeight);
-      if (t < TOTAL) {
-        requestAnimationFrame(loop);
-      } else {
-        // 落定：气泡行 0 高、卡片行完整高度，恢复 overflow；top 交回 React 渲染循环
-        heightStore.measure(ri.bubbleIk, ri.bubbleRowIdx, 0);
-        heightStore.measure(ri.cardIk, ri.cardRowIdx, C);
-        // [v1.0.24.4-r16] 气泡行的 inline **保持 0 高 + hidden 不清除**：这一行马上被
-        //   forceRender 卸载（幽灵守卫返回 null）。若在此清 inline，元素高度瞬间弹回自然高
-        //   （推理面板 ~317px）→ ResizeObserver 在「relayInfo 已清空、元素尚未卸载」的窗口
-        //   触发 → measure(幽灵行, 317) 写回前缀和 → 卡片上方 317px 永久空白
-        //   （活体实锤：settle 后 heights[s46146]=317、offsets +317、无 rebuild 纠正，
-        //   骨架导出同步固化 317 → 复现稳定）。元素带着 0 高卸载，残留 inline 无害。
-        //   卡片行照常清除：它的自然高度就是真实值，RO 实测是校正不是污染。
-        cardEl.style.height = '';
-        cardEl.style.overflow = '';
-        cardEl.style.top = '';
-        setTotalH(heightStore.totalHeight);
-        ri.done = true;
-        relayInfoRef.current = null;
-        relayStartedRef.current = false;
-        heightStore.unprotect(ri.bubbleIk);
-        heightStore.unprotect(ri.cardIk);
-        forceRender();
-      }
-    };
-    requestAnimationFrame(loop);
-    // [v1.0.24.4-r14] 清理函数**不取消 rAF**：动画期间 rows 可能变化（卡片后的新气泡
-    //   streaming 进入 items）→ 本 effect 重跑 → 若在这里 cancel，rAF 被误杀且
-    //   relayStartedRef 挡住重启 → 卡片卡在 0 高「出不来」。rAF 循环 1s 后自然结束。
-    return () => { /* 自驱动，不取消 */ };
+    const bEl = els.get(pair.bubbleIk);
+    const cEl = els.get(pair.cardIk);
+    if (!bEl || !cEl) { settleRelay(false); return; }
+    startRelay(pair, bEl, cEl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, active]);
-
   // [v1.0.23.5_2] 窗口缩放节流：rAF 合并 resize 事件，每帧最多重算一次虚拟窗口。
   //   背景：resize 风暴（审计 01）——连续拖拽时原生重排 + React 层重算叠加，
   //   事件积压 → 渲染进程 516% CPU → 系统卡死。rAF 合并保证 React 层每帧只响应一次。
@@ -1405,6 +1411,11 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
             {(() => {
               const w = win.end >= win.start ? win : { start: 0, end: Math.min(rows.length - 1, 30) };
               const out: React.ReactNode[] = [];
+              // [v1.0.35] relay 候选检测（循环外一次，纯计算无副作用）：relayRunning = 当前
+              //   running 状态；relayPair = idle 时检测到的候选对（isRelayBubble/isRelayCard 用）。
+              const seenIks = mountSeenRef.current ?? (mountSeenRef.current = new Set(rows.map((r) => r.ik)));
+              const relayRunning = relayRef.current.state === 'running' ? relayRef.current : null;
+              const relayPair = relayRunning ? null : findRelayPair(rows, deferredItems, seenIks);
               for (let j = w.start; j <= w.end && j < rows.length; j++) {
                 const row = rows[j];
                 if (!row) continue;
@@ -1423,36 +1434,15 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                 //   重渲染（ResizeObserver 高度校正 / useDeferredValue 二次渲染）都会把
                 //   isNew 翻成 false → vrow 加回 no-anim → animation:none 掐断正在播的
                 //   展开动画 → 卡片闪现。入册交给上方 settle timer：动画播完（1s）才标记历史。
-                const seenIks = mountSeenRef.current ?? (mountSeenRef.current = new Set(rows.map((r) => r.ik)));
                 const isNew = !seenIks.has(row.ik);
 
-                // [v1.0.24.4-r10] 派卡接力对检测：本行是刚定格的推理气泡（agent + 非 streaming
-                //   + 无 text + 有 reasoning），且**下一行**是**新**审批卡 → 启动接力动画：
-                //   气泡行（原气泡）收起 + 卡片行（原卡片）展开，两行独立渲染，
-                //   由 relaySync effect 的 rAF 逐帧驱动两行高度并同步 HeightStore（零错位）。
-                //   [v1.0.24.4-r14] 重写：不再合并渲染 RelayMorph（重渲染气泡会丢状态/叠影），
-                //   气泡行保留原 MessageBubble DOM，卡片行独立 approval-slot。
-                const relayInfo0 = relayInfoRef.current;
-                // [v1.0.24.6-P0] 隐藏会话停摆：不建立接力对（省 relay 动画 rAF + 避免恢复时误触发）
-                if (!relayInfo0 && active && it?.kind === 'agent' && !it.streaming
-                  && !(it.text && it.text.trim()) && !!it.reasoning
-                  && nextRow && nextIt?.kind === 'approval' && !seenIks.has(nextRow.ik)) {
-                  relayInfoRef.current = {
-                    bubbleIk: row.ik,
-                    bubbleRowIdx: j,
-                    cardIk: nextRow.ik,
-                    cardRowIdx: row.nextVisible,
-                    done: false,
-                  };
-                  // [v1.0.24.4-r12] 保护两行：rebuild 的幽灵行删除会与 rAF measure 竞态
-                  //   （prev=undefined → 估算 delta 污染 → 终态重叠），动画期间禁止删除。
-                  heightStore.protect(row.ik);
-                  heightStore.protect(nextRow.ik);
-                }
-                // 检测后重新读取（本帧刚建立接力对时 isRelayBubble 也要为 true）
-                const relayInfo = relayInfoRef.current;
-                const isRelayBubble = !!relayInfo && relayInfo.bubbleIk === row.ik;
-                const isRelayCard = !!relayInfo && relayInfo.cardIk === row.ik;
+                // [v1.0.35] isRelayBubble/isRelayCard：relay 建立已移到 effect，这里用「当前
+                //   running 状态」或「本帧检测到的候选对」判断——气泡行在建立帧也能正确渲染
+                //   （不闪烁）。让位（不写 top）由下方 vrow style 分支按 relayRunning 决定。
+                const isRelayBubble = (relayRunning && relayRunning.bubbleIk === row.ik)
+                  || (relayPair && relayPair.bubbleIk === row.ik);
+                const isRelayCard = (relayRunning && relayRunning.cardIk === row.ik)
+                  || (relayPair && relayPair.cardIk === row.ik);
                 if (!shouldRenderRow(row) && !isRelayBubble) continue;   // 幽灵空气泡：不占位、不画分隔线
                 // [v1.0.24.4-r14] 接力卡片行：正常渲染（approval-slot），高度由 relaySync 的
                 //   rAF 驱动（0→卡高）→ 卡片从气泡位置向下生长。不做任何特殊处理。
@@ -1498,7 +1488,7 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                     //   不丢状态），推理面板 forceReasoningOpen 保持展开（收起动画从完整高度
                     //   开始）。vrow 高度由 relaySync 的 rAF 驱动塌缩（H→0）+ overflow hidden。
                     //   气泡行是幽灵行（无 text 非 streaming）——放行条件 isRelayBubble 在上面。
-                    if (isRelayBubble && relayInfo && !relayInfo.done) {
+                    if (relayRunning && relayRunning.bubbleIk === row.ik) {
                       retractAnimRef.current = true;
                     }
                     // [v1.0.23.4] 统一壳：streaming 期间也用 MessageBubble（bubble agent tail），
@@ -1585,30 +1575,12 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
                     data-index={j}
                     style={{
                       position: 'absolute',
-                      // [v1.0.24.4-r14] relay 动画中的两行：top 由 relaySync 的 rAF 每帧独占写
-                      //   （React 渲染滞后一帧 → 高度变了位置没变 → 瞬态重叠）。rAF 同帧
-                      //   「算高→measure→写 top」→ 绘制时必然一致（零错位）。
-                      // [v1.0.25.3-卡片置顶修复] relay 让位条件加**实际状态**校验：
-                      //   relayInfo/relayStartedRef 只是「意图」，rAF 可能因切群交错/隐藏
-                      //   会话停摆从未写出内联 top（实测：官网设计群卡片行 style.top 永远空
-                      //   → 绝对定位退化为 static → 排到消息流最上方第 1 行）。
-                      //   只有该行 DOM 的 style.top **真实存在**（rAF 写过）才让位；
-                      //   否则渲染循环兜底写 top——位置永远正确，动画只是增强。
-                      //   同时主动自愈：清理残留 relay 状态（后续新卡片才能再建接力对）。
-                      // [v1.0.24.7-P0-1-防线1] 渲染循环 fallback：relay 行挂着但 rAF **未在跑**
-                      //   （relayStartedRef=false，如启动失败/active 翻转后未恢复）→ 仍写 top，
-                      //   位置永远正确——动画只是增强，不是位置正确性的前提。rAF 启动后
-                      //   relayStartedRef=true，渲染循环继续让位（避免与 rAF 竞争写 top）。
-                      ...(relayInfo && (relayInfo.bubbleIk === row.ik || relayInfo.cardIk === row.ik)
-                        && relayStartedRef.current
-                        ? (() => {
-                            const relayEl = rowElsRef.current.get(row.ik);
-                            if (relayEl && relayEl.style.top) return {};
-                            // rAF 未写 top（残留/未启动）→ 兜底写 + 自愈清理
-                            relayInfoRef.current = null;
-                            relayStartedRef.current = false;
-                            return { top: heightStore.topOf(j) };
-                          })()
+                      // [v1.0.35] relay 行让位：仅当本行属于「running 状态」的接力对时让位给 rAF
+                      //   （rAF 活跃，每帧独占写 top）。其余情况（idle/候选/已落定）渲染循环正常
+                      //   写 top——位置永远正确，动画只是增强。原「style.top 非空即让位」的自愈
+                      //   逻辑（防线1）删除：状态机分支天然覆盖，不再需要独立兜底清理点。
+                      ...(relayRunning && (relayRunning.bubbleIk === row.ik || relayRunning.cardIk === row.ik)
+                        ? {}
                         : { top: heightStore.topOf(j) }),
                       left: 0,
                       right: 0,

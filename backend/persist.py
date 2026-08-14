@@ -60,6 +60,7 @@ REGISTRY_NAME = "projects.json"
 EVENTS_DIR = "events"
 ROSTER_SUFFIX = "_roster.jsonl"        # [v0.8a A-1] events/{pid}_roster.jsonl
 SEQ_SUFFIX = ".seq"                       # v0.13: 每项目 seq 高水位（瞬时事件不落 JSONL）
+READ_SUFFIX = ".read"                     # v1.0.35.3: 每项目已读水位（跨重启保留未读语义）
 
 # ═══════════════════════════════════════════════════════════════
 # [v0.12 D · 问题四] 什么该落盘、什么不该
@@ -171,6 +172,7 @@ class Store:
         self.registry_path = self.root / REGISTRY_NAME
         self.events_dir.mkdir(parents=True, exist_ok=True)
         self._seq_cache: dict[str, int] = {}
+        self._read_cache: dict[str, int] = {}
         # Token telemetry is appended from multiple concurrent project/agent tasks.
         # A process-local lock keeps each JSON line contiguous without putting the chat
         # event log or the LLM control path behind the same lock.
@@ -384,6 +386,9 @@ class Store:
         for key in list(self._seq_cache):
             if key == project_id or key.startswith(f"dm:{project_id}:"):
                 self._seq_cache.pop(key, None)
+        for key in list(self._read_cache):
+            if key == project_id or key.startswith(f"dm:{project_id}:"):
+                self._read_cache.pop(key, None)
         return existed
 
     # ═══════════════════════════════════════════════════════════
@@ -509,6 +514,36 @@ class Store:
                     log.warning("[%s] 迁移 seq 高水位写入失败：%s", project_id, exc)
         value = max(0, value)
         self._seq_cache[project_id] = value
+        return value
+
+    # ── 已读水位（v1.0.35.3）───────────────────────────────
+    # 与 seq 高水位同款「单整数原子落盘」。已读水位决定未读数（未读 = 消息数 − 已读），
+    # 不落盘则重启归零、全部历史被算成未读。
+    def read_path(self, project_id: str) -> Path:
+        return self.events_dir / f"{_safe_name(project_id)}{READ_SUFFIX}"
+
+    def save_read_watermark(self, project_id: str, seq: int) -> None:
+        if not isinstance(seq, int) or seq < 0:
+            return
+        if seq <= self._read_cache.get(project_id, -1):
+            return
+        try:
+            self._atomic_write(self.read_path(project_id), str(seq) + "\n")
+            self._read_cache[project_id] = seq
+        except OSError as exc:
+            log.warning("[%s] 已读水位写入失败：%s", project_id, exc)
+
+    def load_read_watermark(self, project_id: str) -> int:
+        path = self.read_path(project_id)
+        try:
+            if path.is_file():
+                value = int(path.read_text("ascii").strip())
+            else:
+                value = 0
+        except (OSError, ValueError):
+            value = 0
+        value = max(0, value)
+        self._read_cache[project_id] = value
         return value
 
     def append_event(self, project_id: str, event: dict[str, Any]) -> None:

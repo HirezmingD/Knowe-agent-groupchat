@@ -3970,6 +3970,11 @@ class ProjectEngine:
                 completion, _stored = self.completion_store.commit_success(run, record)
             else:
                 completion = self.completion_store.commit_run(run)
+            # [v1.0.35.2] 清空在途流式广播（fire-and-forget 的 reasoning_delta/stream_delta），
+            #   保证 agent_idle 是该 worker 流式事件的最后一条。停止路径（runtime 吞
+            #   CancelledError 后在此提交 CANCELLED completion）也走这里——晚到的推理增量
+            #   若越过 agent_idle 到达前端，会在气泡落定后重建「AI 推理中」占位气泡（残留）。
+            await self._drain()
             await self.reconcile_completion_outbox(completion.completion_id)
             # [v1.0.21.1 REQ-1] 成功终局：释放信封，杜绝残留被再拉起
             self._close_task_envelope(worker_id)
@@ -5090,6 +5095,10 @@ class ProjectEngine:
         except asyncio.CancelledError:
             if worker_id is not None and not self._stopping:
                 reason = self._stop_reasons.get(worker_id) or STOP_REASON_USER
+                # [v1.0.35.2] 先清空在途流式广播（fire-and-forget 的 reasoning_delta/stream_delta），
+                #   保证 agent_idle 一定是该 worker 流式事件的最后一条——否则晚到的推理增量
+                #   会在前端气泡落定后重建「AI 推理中」占位气泡（残留）。
+                await asyncio.shield(self._drain())
                 await asyncio.shield(self.fail_task(worker_id, reason))
             raise
         except Exception as exc:

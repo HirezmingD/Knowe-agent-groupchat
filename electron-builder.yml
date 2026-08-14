@@ -20,7 +20,8 @@ copyright: Copyright © 2026 Knowe
 #   （v1.0.26.2 构建实锤）→ version 必须三段；曾用「内部 1.0.27 / 显示 1.0.26.2.0」双轨，
 #   但双轨导致服务器旧索引 URL 版本替换失效且维护混乱，v1.0.28 起统一。
 #   buildVersion（Windows FileVersion/ProductVersion）按 Windows 惯例四段 1.0.29.0，仅此一处。
-buildVersion: 1.0.33.0
+#   ⚠ 每次发版必须同步（曾漏改：1.0.33 打包时仍为 1.0.32.0 被审计发现）。
+buildVersion: 1.0.35.0
 
 # 使用本地已装的 electron 发行版（node_modules/electron/dist），跳过「下载 zip → 解压 → rename」：
 # 腾讯电脑管家实时防护会锁住新解压的 electron.exe，导致 rename EPERM（实测），

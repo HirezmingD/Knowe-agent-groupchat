@@ -856,6 +856,8 @@ export const StateSnapshotSchema = z.object({
 
   pending_card: z.unknown().nullable().optional(),
   seq: z.number().int().min(0),          // 快照本身消耗一个新 seq 并写入 ring
+  /** [v1.0.35.3] 未读消息数（后端按 message/approval_card 数好下发），快照重建后据此恢复未读。 */
+  unread_count: z.number().int().min(0).optional(),
   /**
    * [v1.0.24.4] 该群引擎的权威活动账本（可选）。旧后端不带此字段 → 前端退回现状不校准。
    */
@@ -1153,6 +1155,14 @@ export const RequestSnapshotCmdSchema = z.object({
 });
 export type RequestSnapshotCmd = z.infer<typeof RequestSnapshotCmdSchema>;
 
+/** [v1.0.35.3] 上报已读水位：切群/聚焦/标记已读时发，后端据此推进 last_read_seq 并落盘。 */
+export const MarkReadCmdSchema = z.object({
+  type: z.literal('mark_read'),
+  project_id: z.string(),
+  seq: z.number().int().min(0),
+});
+export type MarkReadCmd = z.infer<typeof MarkReadCmdSchema>;
+
 /** 系统目录选择器选定新目录后回传。request_id 必须取自最新弹窗，防止旧弹窗覆盖新状态。 */
 export const SetProjectDirectoryCmdSchema = z.object({
   type: z.literal('set_project_directory'),
@@ -1204,6 +1214,7 @@ export const OutboundCommandSchema = z.discriminatedUnion('type', [
   AddAgentsCmdSchema,
   ReplayRequestCmdSchema,
   RequestSnapshotCmdSchema,
+  MarkReadCmdSchema,
   SetProjectDirectoryCmdSchema,
   CancelProjectDirectoryCmdSchema,
   PingCmdSchema,

@@ -27,6 +27,7 @@ from .config import CONFIG
 from .contract import (
     NO_SEQ_EVENT_TYPES,
     STRUCTURAL_EVENT_TYPES,
+    UNREAD_EVENT_TYPES,
     ContractViolation,
     now_ts,
 )
@@ -87,9 +88,8 @@ class Project:
         self.members: list[dict[str, str]] = []
         self.pending_card: dict[str, Any] | None = None
 
-    @property
-    def unread_count(self) -> int:
-        return max(0, self.seq - self.last_read_seq)
+    # unread_count 已上移到 Hub.unread_count()（v1.0.35.3）：未读须按「消息数」算，
+    # 消息全集在 durable_conversation（Hub 层有 store 才能读盘），Project 只有 ring。
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -223,6 +223,16 @@ class Hub:
         for ev in events:
             proj.ring.append(ev)
         proj.seq = max(max((int(e["seq"]) for e in events), default=0), int(seq_watermark or 0))
+        # v1.0.35.3: 恢复已读水位（跨重启保留未读语义）。
+        # 老数据无 .read 记录 → 历史算已读并立即落盘（last_read_seq = seq），
+        # 避免升级后「全部历史变未读」吓到用户，同时让升级后的新消息能正确算未读。
+        if self.store is not None:
+            read = self.store.load_read_watermark(project_id)
+            if read > 0:
+                proj.last_read_seq = read
+            else:
+                proj.last_read_seq = proj.seq
+                self.store.save_read_watermark(project_id, proj.seq)
         self.projects[project_id] = proj
         return proj
 
@@ -446,6 +456,7 @@ class Hub:
                 "agents": list(proj.members),
                 "conversation": conversation,
                 "pending_card": proj.pending_card,
+                "unread_count": self._count_unread(proj.last_read_seq, conversation),
                 "ts": now_ts(),
                 "seq": proj.seq,
             }
@@ -466,10 +477,34 @@ class Hub:
         return event
 
     # ── 已读水位 ──
+    def unread_count(self, project_id: str) -> int:
+        """未读消息数 = 已读水位之后的消息/审批卡数（与前端 isUnreadEvent 对齐）。
+
+        v1.0.35.3 之前用 seq 事件数（未读虚高，如 186 vs 实际 6 条），现改为数
+        durable_conversation 里的 message / approval_card。读盘发生在握手/快照路径，
+        非逐消息路径，可接受。
+        """
+        proj = self.projects.get(project_id)
+        if proj is None:
+            return 0
+        return self._count_unread(proj.last_read_seq, self.durable_conversation(project_id))
+
+    @staticmethod
+    def _count_unread(last_read_seq: int, conversation: list[dict[str, Any]]) -> int:
+        return sum(
+            1 for ev in conversation
+            if ev.get("seq", 0) > last_read_seq and ev.get("type") in UNREAD_EVENT_TYPES
+        )
+
     def mark_read(self, project_id: str, seq: int) -> None:
         proj = self.projects.get(project_id)
         if proj is not None:
             proj.last_read_seq = max(proj.last_read_seq, seq)
+            # v1.0.35.3: 落盘，否则重启归零、全部历史被算成未读。
+            if self.store is not None:
+                _pid, _seq = project_id, proj.last_read_seq
+                self.store.defer_bg(lambda: self.store.save_read_watermark(_pid, _seq),
+                                    description=f"{_pid} 已读水位")
 
     # ── /health ──
     def health(self) -> dict[str, Any]:

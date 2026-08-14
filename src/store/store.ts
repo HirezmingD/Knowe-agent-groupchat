@@ -577,6 +577,8 @@ export interface KnoweStore {
   setWindowFocused: (focused: boolean) => void;
   /** 把某个会话标记为已读（点进去、或窗口重新获得焦点时） */
   markRead: (projectId: string) => void;
+  /** [v1.0.35.3] 上报已读水位（切群/聚焦/标记已读时内部调用）。 */
+  reportRead: (projectId: string) => void;
   registerProject: (projectId: string, projectName?: string) => Conv;
   getProjectList: () => { project_id: string; name: string }[];
 
@@ -817,6 +819,8 @@ export const useKnoweStore = create<KnoweStore>()(
 
       // 用户正盯着这个群 → 插队，立刻发
       requestSnapshotOnce(projectId, () => get()._socket, true);
+      // [v1.0.35.3] 点进来了 = 看见了 → 上报已读水位（后端推进 last_read_seq 并落盘）。
+      get().reportRead(projectId);
     },
 
     /**
@@ -858,11 +862,32 @@ export const useKnoweStore = create<KnoweStore>()(
           ensureConversation(draft.convs, draft.activeProjectId).unread = 0;
         }
       });
+      // [v1.0.35.3] 回到前台 = 看见了 → 上报已读水位。
+      if (focused) {
+        const pid = get().activeProjectId;
+        if (pid) get().reportRead(pid);
+      }
     },
 
     markRead(projectId: string): void {
       if (!projectId) return;
       set((draft) => { ensureConversation(draft.convs, projectId).unread = 0; });
+      // [v1.0.35.3] 标记已读 = 看见了 → 上报已读水位。
+      get().reportRead(projectId);
+    },
+
+    /**
+     * [v1.0.35.3] 上报已读水位：把「读到了」告诉后端，后端推进 last_read_seq 并落盘。
+     * seq 取 socket 的会话水位（watermarks[pid] = 该会话收到的最新事件 seq）。
+     */
+    reportRead(projectId: string): void {
+      if (!projectId) return;
+      const socket = get()._socket;
+      if (!socket) return;
+      const seq = socket.watermarks[projectId];
+      if (typeof seq === 'number' && seq > 0) {
+        socket.sendCommand({ type: 'mark_read', project_id: projectId, seq });
+      }
     },
 
     /**
@@ -1397,7 +1422,11 @@ export const useKnoweStore = create<KnoweStore>()(
         if (silent) {
           // muted/folded：不论成员状态还是群消息，都不能留下红点或任务栏数字。
           conv.unread = 0;
-        } else if (!watching && isUnreadEvent(event)) {
+        } else if (eventType === 'state_snapshot') {
+          // [v1.0.35.3] 快照重建：applyEvent 已用后端下发的 unread_count 设置未读。
+          // 正看着则归零；不在看则保留后端未读数。不再靠 replay 历史回放 +1。
+          if (watching) conv.unread = 0;
+        } else if (!watching && draft.conn === 'live' && isUnreadEvent(event)) {
           conv.unread = (conv.unread || 0) + 1;
         }
       });

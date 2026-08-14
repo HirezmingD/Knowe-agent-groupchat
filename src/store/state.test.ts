@@ -507,3 +507,50 @@ describe('多会话管理', () => {
     ]);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// [v1.0.35.2] 停止后流式气泡残留：晚到推理增量按 scope 级活跃判断拦截
+describe('reasoning_delta · 停止后晚到增量的 scope 级拦截', () => {
+  function setup(c: Conv): void {
+    apply(c, {
+      type: 'agents_created', agent_id: 'coordinator', count: 1,
+      members: [{ id: 'fe_1', role: '前端' }], seq: 1, ...base,
+    });
+  }
+
+  it('晚到的 reasoning_delta（scope 已 idle）→ 不重建气泡', () => {
+    const c = conv();
+    setup(c);
+    apply(c, { type: 'agent_active', agent_id: 'fe_1', scope_id: 'scope-a', channel_id: 'p1', reason: 'worker_turn', seq: 2, ...base });
+    apply(c, { type: 'reasoning_delta', agent_id: 'fe_1', content: '正在想', scope_id: 'scope-a', channel_id: 'p1', seq: 3, ...base });
+    // 停止：agent_idle 销账 scope-a
+    apply(c, { type: 'agent_idle', agent_id: 'fe_1', scope_id: 'scope-a', channel_id: 'p1', seq: 4, ...base });
+    const settled = c.items.length;
+    // 晚到增量：scope-a 已 idle → 丢弃，不重建
+    apply(c, { type: 'reasoning_delta', agent_id: 'fe_1', content: '迟到的', scope_id: 'scope-a', channel_id: 'p1', seq: 5, ...base });
+    expect(c.items.length).toBe(settled);
+  });
+
+  it('新一轮派活（新 scope）→ 不被误杀，正常累积推理', () => {
+    const c = conv();
+    setup(c);
+    apply(c, { type: 'agent_active', agent_id: 'fe_1', scope_id: 'scope-a', channel_id: 'p1', reason: 'worker_turn', seq: 2, ...base });
+    apply(c, { type: 'agent_idle', agent_id: 'fe_1', scope_id: 'scope-a', channel_id: 'p1', seq: 3, ...base });
+    // 新一轮：新 scope 开工
+    apply(c, { type: 'agent_active', agent_id: 'fe_1', scope_id: 'scope-b', channel_id: 'p1', reason: 'worker_turn', seq: 4, ...base });
+    apply(c, { type: 'reasoning_delta', agent_id: 'fe_1', content: '新一轮思考', scope_id: 'scope-b', channel_id: 'p1', seq: 5, ...base });
+    const bubble = c.items[c.items.length - 1] as AgentItem;
+    expect(bubble.scopeId).toBe('scope-b');
+    expect(bubble.reasoning).toBe('新一轮思考');
+  });
+
+  it('正常流式：agent_active 后 reasoning_delta 正常累积', () => {
+    const c = conv();
+    setup(c);
+    apply(c, { type: 'agent_active', agent_id: 'fe_1', scope_id: 'scope-a', channel_id: 'p1', reason: 'worker_turn', seq: 2, ...base });
+    apply(c, { type: 'reasoning_delta', agent_id: 'fe_1', content: '第一段', scope_id: 'scope-a', channel_id: 'p1', seq: 3, ...base });
+    apply(c, { type: 'reasoning_delta', agent_id: 'fe_1', content: '第二段', scope_id: 'scope-a', channel_id: 'p1', seq: 4, ...base });
+    const bubble = c.items[c.items.length - 1] as AgentItem;
+    expect(bubble.reasoning).toBe('第一段第二段');
+  });
+});

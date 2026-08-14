@@ -395,8 +395,12 @@ STRUCTURAL_EVENT_TYPES: frozenset[str] = frozenset({
     "user_echo",
 })
 
-# Durable control projections that must survive restart/replay but must not be folded
-# into the visible chat conversation.
+# 未读判据：只有「说完了的话」和「待审批卡」算未读，与前端 isUnreadEvent 严格对齐。
+# 其余结构事件（user_echo 回声、系统行、报告提交等）都不亮未读。
+UNREAD_EVENT_TYPES: frozenset[str] = frozenset({
+    "message",
+    "approval_card",
+})
 PERSISTABLE_EVENT_TYPES: frozenset[str] = STRUCTURAL_EVENT_TYPES | frozenset({
     "completion_status",
     "agent_idle",

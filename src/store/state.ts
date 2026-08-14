@@ -996,6 +996,14 @@ export function applyEvent(
     case 'reasoning_delta': {
       registerMember(c, ev.agent_id, agents, roleTypes);
       const identity = activityIdentity(c, ev);
+      // [v1.0.35.2] 单号级（scope 级）活跃判断：该 scope 已被 agent_idle 销账
+      //   （activeScopes 无此 key）→ 晚到/乱序的推理增量直接丢弃，不重建占位气泡。
+      //   判「scope 是否活跃」而非「agent 是否 idle」，避免误杀新一轮派活（新旧 scope 不同）。
+      const member = c.members.find((m) => m.id === ev.agent_id);
+      if (member && member.status !== 'removed') {
+        const active = member.activeScopes || {};
+        if (active[activityScopeKey(identity)] === undefined) break;
+      }
       let sIdx = findLastStreamingIndex(c.items, ev.agent_id, identity);
       if (sIdx < 0) {
         // [v1.0.23.5] worker 无正文流：推理增量先于正文流到达且 worker 不产生
@@ -1633,6 +1641,8 @@ export function applyEvent(
           rebuilt_items: c.items.length,
         });
       }
+      // v1.0.35.3: 未读恢复以后端下发的 unread_count（消息数）为准，不再靠 replay 历史回放 +1。
+      if (typeof ev.unread_count === 'number') c.unread = ev.unread_count;
       break;
     }
 
