@@ -853,7 +853,18 @@ def _probe_once(url: str, headers: dict[str, str], body: dict[str, Any],
     )
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=_TEST_TIMEOUT_S) as resp:
+        # [v1.0.35][macOS] python.org framework 的 ssl 默认 CA 路径（etc/openssl/cert.pem）
+        # 在 PyInstaller 打包后为空 → urllib 默认上下文拿不到任何根 CA，把所有证书链都判成
+        # 「self signed certificate」而误报连不上；而 Agent 实际路径（httpx）显式用 certifi
+        # 所以正常。这里对齐：显式用 certifi 的 CA bundle 建 SSL 上下文。
+        import certifi
+        import ssl
+        _opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(
+                context=ssl.create_default_context(cafile=certifi.where())
+            )
+        )
+        with _opener.open(req, timeout=_TEST_TIMEOUT_S) as resp:
             resp.read(512)   # 只要能读到响应体开头就算通；内容不重要
             return (200, None, int((time.monotonic() - started) * 1000))
     except urllib.error.HTTPError as exc:
