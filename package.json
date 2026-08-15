@@ -23,8 +23,10 @@
     "build:manifest": "node scripts/write-build-manifest.mjs",
     "electron:build:clean": "node scripts/clean-electron-build.mjs && npm run electron:build",
     "icon:ico": "node scripts/make-icon-ico.mjs",
+    "icon:icns": "node scripts/make-icon-icns.mjs",
     "copy:chromium": "node scripts/copy-chromium.mjs",
-    "dist:win": "node scripts/clean-electron-build.mjs && npm run icon:ico && npm run electron:build && npm run copy:chromium && electron-builder --win nsis"
+    "dist:win": "node scripts/clean-electron-build.mjs && npm run icon:ico && npm run electron:build && npm run copy:chromium && electron-builder --win nsis",
+    "dist:mac": "node scripts/clean-electron-build.mjs && npm run icon:icns && npm run electron:build && npm run copy:chromium && electron-builder --mac"
   },
   "dependencies": {
     "i18next": "^26.3.6",

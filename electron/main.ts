@@ -84,7 +84,12 @@ const PROJECT_ROOT = join(__dirname, '..', '..');
 
 /** 安装根是桌面数据与打包资源的唯一定位基准。 */
 const INSTALL_ROOT = app.isPackaged ? dirname(process.execPath) : PROJECT_ROOT;
-const DATA_ROOT = join(INSTALL_ROOT, 'data');
+// [macOS R2] 数据根：win32 随安装目录走；darwin 打包态迁到 Application Support
+//   （.app bundle 签名后只读，数据写不进）。用 app.getPath('userData') 动态取，
+//   必须在下方 app.setPath('userData', …) 之前取到默认值，避免 userData 自指。
+const DATA_ROOT = app.isPackaged && process.platform === 'darwin'
+  ? app.getPath('userData')
+  : join(INSTALL_ROOT, 'data');
 const ELECTRON_DATA_ROOT = join(DATA_ROOT, 'electron');
 const BACKEND_DATA_ROOT = join(DATA_ROOT, 'backend');
 
@@ -93,7 +98,11 @@ const BACKEND_DATA_ROOT = join(DATA_ROOT, 'backend');
 //   启动早期（模块顶层）指到安装目录，让差分样本/索引/下载包全部落在
 //   <安装目录>\cache\knowe-updater，不碰系统盘。仅打包版生效，开发态不污染系统变量。
 if (app.isPackaged) {
-  process.env.LOCALAPPDATA = join(INSTALL_ROOT, 'cache');
+  // [macOS R2] LOCALAPPDATA 仅 win32 生效：darwin 上 electron-updater 不读它，
+  //   缓存自然落到 ~/Library/Caches，无需（也无法）重定向到只读的 .app 内。
+  if (process.platform === 'win32') {
+    process.env.LOCALAPPDATA = join(INSTALL_ROOT, 'cache');
+  }
 }
 
 function localPort(name: string, fallback: number): number {
@@ -114,8 +123,12 @@ let RUNTIME_ENDPOINTS = {
 const BACKEND_DIR = app.isPackaged
   ? join(process.resourcesPath, 'backend')
   : join(PROJECT_ROOT, 'backend');
-// [阶段1.5] 打包版后端 = PyInstaller 单文件产物（随 resources/backend 一起分发）。
-const BACKEND_EXE = join(BACKEND_DIR, 'KnoweBackend.exe');
+// [阶段1.5] 打包版后端 = PyInstaller 产物（随 resources/backend 一起分发）。
+//   [macOS R1] 产物名按平台区分：win32 → KnoweBackend.exe，darwin → KnoweBackend（无后缀 mach-o）。
+const BACKEND_EXE = join(
+  BACKEND_DIR,
+  process.platform === 'win32' ? 'KnoweBackend.exe' : 'KnoweBackend',
+);
 const BUNDLED_RUNTIME_ROOT = app.isPackaged
   ? join(process.resourcesPath, 'runtime')
   : join(PROJECT_ROOT, 'runtime');
@@ -229,7 +242,11 @@ const LEGACY_ELECTRON_DATA_ROOT = app.getPath('userData');
 let dataRootInitError: Error | null = null;
 let electronDataRootBound = false;
 try {
-  migrateLegacyDataRoots(LEGACY_ELECTRON_DATA_ROOT);
+  // [macOS R2] darwin 打包态无 legacy 数据（mac 首次发布），且 DATA_ROOT 即 userData，
+  //   迁移会把 userData 自身搬进 userData/electron 造成灾难，直接跳过迁移。
+  if (!(app.isPackaged && process.platform === 'darwin')) {
+    migrateLegacyDataRoots(LEGACY_ELECTRON_DATA_ROOT);
+  }
   mkdirSync(ELECTRON_DATA_ROOT, { recursive: true });
   mkdirSync(BACKEND_DATA_ROOT, { recursive: true });
 } catch (error: unknown) {
@@ -403,7 +420,10 @@ let current: BackendStatus = {
 // ═══════════════════════════════════════════════════════════════
 
 /** 日志根目录：打包版 → 安装目录\Logs；开发版 → 项目根\Logs（与 INSTALL_ROOT 分流机制一致）。 */
-const LOG_ROOT = join(INSTALL_ROOT, 'Logs');
+// [macOS R2] darwin 打包态跟随数据根迁到 Application Support（.app 内只读，写不进会静默丢日志）。
+const LOG_ROOT = app.isPackaged && process.platform === 'darwin'
+  ? join(DATA_ROOT, 'Logs')
+  : join(INSTALL_ROOT, 'Logs');
 
 /** 按天翻篇的文件名：backend_YYYYMMDD.log */
 function logFileName(date: Date): string {
@@ -689,7 +709,7 @@ function buildBackendEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * 启动后端子进程：打包版执行 KnoweBackend.exe（PyInstaller 产物），
+ * 启动后端子进程：打包版执行 KnoweBackend（PyInstaller 产物，win32 为 .exe），
  * 开发态 `python -m backend`（cwd=PROJECT_ROOT，归一后单层包解析前提；
  * knowe_* 由 PYTHONPATH=BACKEND_DIR 兜底）。
  *   前置检查放在这里——可执行文件或 backend/ 不在，直接判 failed，
@@ -746,7 +766,7 @@ function spawnBackend(): void {
       //   server.py 的 `from knowe_provenance import ...` 依赖 PYTHONPATH=BACKEND_DIR 兜底。
       //   [v1.0.24.7 结构归一] backend 上提为单层实现包，`python -m backend` 必须从
       //   PROJECT_ROOT 启动才能解析 backend 包；knowe_* 顶层包仍由 PYTHONPATH=BACKEND_DIR 兜底。
-      //   [阶段1.5] 打包态：KnoweBackend.exe 以 BACKEND_DIR 为 cwd，_internal/ 依赖按相对路径解析。
+      //   [阶段1.5] 打包态：KnoweBackend（win32 为 .exe）以 BACKEND_DIR 为 cwd，_internal/ 依赖按相对路径解析。
       cwd: app.isPackaged ? BACKEND_DIR : PROJECT_ROOT,
       // 固定打包运行时 + UTF-8 stdio + 唯一后端数据根（见 buildBackendEnv）。
       env: backendEnv,
@@ -1670,7 +1690,39 @@ function registerIpc(): void {
 // ═══════════════════════════════════════════════════════════════
 
 function createWindow(): void {
-  Menu.setApplicationMenu(null);
+  // [macOS R6] darwin 下保留标准应用菜单（App + Edit + Quit），否则 Cmd+Q/Cmd+C/Cmd+V 失效
+  //   （这些系统快捷键由应用菜单提供）；其余平台维持无菜单栏。
+  if (process.platform === 'darwin') {
+    const template: Electron.MenuItemConstructorOptions[] = [
+      {
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' },
+        ],
+      },
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' },
+          { role: 'redo' },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' },
+        ],
+      },
+    ];
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  } else {
+    Menu.setApplicationMenu(null);
+  }
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
