@@ -58,6 +58,8 @@ const api: KnoweBridge = {
   // [v1.0.25.4] 产品版本号改由主进程注入（--knowe-product-version，源=package.json
   //   productVersion），不再手写——消除「UI 显示与包版本不同源」的硬编码隐患。
   version: argumentValue('knowe-product-version') || '0.0.0',
+  // [macOS R7] 平台标识：渲染端据此做平台化 UI 分支（如 mac 隐藏自绘窗口按钮、改菜单布局）。
+  platform: process.platform,
   runtimeEndpoints,
 
   // ── 后端状态：问一次 ──

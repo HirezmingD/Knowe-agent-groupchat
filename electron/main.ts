@@ -1727,14 +1727,17 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     show: false, // 先不显示，等页面 ready-to-show 再亮，避免白屏闪一下
-    // [v1.0 frameless] 无边框：去掉原生系统标题栏与窗框，标题栏由渲染进程自绘
+    // [v1.0 frameless] 无边框：win32 去掉原生标题栏，标题栏由渲染进程自绘
     //   （App.tsx 的 .titlebar：左侧空白可拖拽，右侧 .traffic 三颗控制点）。
     //   可拖拽区/让位区全由既有 CSS 决定（.titlebar 是 -webkit-app-region:drag，
     //   .traffic / .title-right 是 no-drag），主进程只管两件事：这里把框拿掉、
     //   registerIpc ⑦ 把三颗点的动作接到真·窗口 API。
-    //   不用 titleBarStyle/titleBarOverlay：那套画的是**原生**按钮，而需求就是要
-    //   自绘的红黄绿圆点。窗口的缩放边、Aero Snap、投影由默认 thickFrame 保留，不受影响。
-    frame: false,
+    // [macOS R7] darwin 上不取 frame:false，改用 titleBarStyle:'hidden'：保留无边框观感
+    //   （标题栏文字消失、窗口内容仍顶到顶），但让**系统原生红黄绿 traffic lights**
+    //   浮在左上角——其余布局（.titlebar 拖拽区、.clist/.main 间距）一概不动；
+    //   渲染端据此不再自绘右侧 .traffic（见 App.tsx 的 IS_MAC 分支）。
+    frame: process.platform !== 'darwin',
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
     title: 'Knowe',
     // APP 窗口/任务栏图标：public/brand/app-icon.png（由 fix-assets 脚本从 Knowe图标2.png 复制而来）
     icon: join(PROJECT_ROOT, 'public', 'brand', 'app-icon.png'),

@@ -50,6 +50,14 @@ import { selectActiveView, selectActiveProjectId } from '../store/selectors';
 let _appSocketBooted = false;
 
 /**
+ * [macOS R7] 是否 macOS。来自 preload 桥暴露的 process.platform（见 bridge.ts / preload.ts）。
+ *   mac 上系统原生红黄绿 traffic lights 由 main.ts 的 titleBarStyle:'hidden' 画在左上角，
+ *   渲染端不再自绘右侧 .traffic 三颗点（否则右上角会出现两套窗口控制，还都是错的）。
+ *   用 globalThis 而非 window：与 windowControl.ts 同一理由，兼容无 DOM 的 import 上下文。
+ */
+const IS_MAC = (globalThis as { knowe?: { platform?: string } }).knowe?.platform === 'darwin';
+
+/**
  * [v1.0.24.6-P2] 事件批量消费：16ms rAF 窗口合并渲染。
  *
  * 现状：每条 WS 帧（stream_delta/reasoning_delta 每秒几十条）是独立 onmessage 回调
@@ -551,27 +559,31 @@ export const App: React.FC = () => {
           <header className="titlebar">
             <div className="title-mid" />
             <div className="traffic">
-              <button
-                type="button"
-                className="tl tl-minimize"
-                title={t('app.05')}
-                aria-label={t('app.06')}
-                onClick={() => invokeWindowControl('minimize')}
-              />
-              <button
-                type="button"
-                className="tl tl-maximize"
-                title={t('app.03')}
-                aria-label={t('app.04')}
-                onClick={() => invokeWindowControl('toggle-maximize')}
-              />
-              <button
-                type="button"
-                className="tl tl-close"
-                title={t('app.01')}
-                aria-label={t('app.02')}
-                onClick={() => invokeWindowControl('close')}
-              />
+              {!IS_MAC && (
+                <>
+                  <button
+                    type="button"
+                    className="tl tl-minimize"
+                    title={t('app.05')}
+                    aria-label={t('app.06')}
+                    onClick={() => invokeWindowControl('minimize')}
+                  />
+                  <button
+                    type="button"
+                    className="tl tl-maximize"
+                    title={t('app.03')}
+                    aria-label={t('app.04')}
+                    onClick={() => invokeWindowControl('toggle-maximize')}
+                  />
+                  <button
+                    type="button"
+                    className="tl tl-close"
+                    title={t('app.01')}
+                    aria-label={t('app.02')}
+                    onClick={() => invokeWindowControl('close')}
+                  />
+                </>
+              )}
             </div>
           </header>
 
