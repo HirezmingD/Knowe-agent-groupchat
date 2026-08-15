@@ -29,6 +29,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { roleLabel, memberNameLabel } from '../shared/roleLabel';
+import { IS_MAC } from '../shared/platform';
 import { createSocket, initWsAuthToken } from '../transport/socket';
 import { warmUpIncremental } from '../store/incrementalSync';   // [v1.0.23.6] 启动预热
 import { record as recordDiagnostic } from '../observe/corridor';
@@ -48,14 +49,6 @@ import { selectActiveView, selectActiveProjectId } from '../store/selectors';
  * HMR/重挂载时连接保持（也避免了重连全量重放）。
  */
 let _appSocketBooted = false;
-
-/**
- * [macOS R7] 是否 macOS。来自 preload 桥暴露的 process.platform（见 bridge.ts / preload.ts）。
- *   mac 上系统原生红黄绿 traffic lights 由 main.ts 的 titleBarStyle:'hidden' 画在左上角，
- *   渲染端不再自绘右侧 .traffic 三颗点（否则右上角会出现两套窗口控制，还都是错的）。
- *   用 globalThis 而非 window：与 windowControl.ts 同一理由，兼容无 DOM 的 import 上下文。
- */
-const IS_MAC = (globalThis as { knowe?: { platform?: string } }).knowe?.platform === 'darwin';
 
 /**
  * [v1.0.24.6-P2] 事件批量消费：16ms rAF 窗口合并渲染。

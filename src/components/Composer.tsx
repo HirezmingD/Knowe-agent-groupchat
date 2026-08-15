@@ -26,6 +26,7 @@ import React, {
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { roleLabel } from '../shared/roleLabel';
+import { SEND_KEY } from '../shared/platform';
 import { useKnoweStore } from '../store/store';
 import {
   selectActiveMembers, selectActiveProjectId, selectConn, makeSelectDraft,
@@ -724,7 +725,7 @@ export const Composer: React.FC = () => {
           rows={1}
           value={text}
           placeholder={conn === 'live'
-            ? t('composer.02')
+            ? t('composer.02', { sendKey: SEND_KEY })
             : t('composer.03')}
           aria-label={t('composer.15')}
           onChange={(e) => {
@@ -793,7 +794,7 @@ export const Composer: React.FC = () => {
         <button
           className={'send' + (idle ? ' idle' : '')}
           aria-label={t('composer.04')}
-          title={t('composer.05')}          /* [v0.8b #9] */
+          title={t('composer.05', { sendKey: SEND_KEY })}          /* [v0.8b #9] */
           disabled={idle}
           onClick={doSend}
         >
