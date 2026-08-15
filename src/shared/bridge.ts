@@ -85,6 +85,8 @@ export interface KnoweBridge {
    */
   readonly isPackaged?: boolean;
   readonly version: string;
+  /** 平台标识：process.platform 原样透传（'darwin' | 'win32' | 'linux'），渲染端做平台化 UI 分支（如 mac 隐藏自绘窗口按钮）。 */
+  readonly platform: string;
   readonly runtimeEndpoints: RuntimeEndpoints;
 
   /** 问一次当前状态 */

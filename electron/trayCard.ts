@@ -21,7 +21,15 @@ import { existsSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import type { UnreadDetail } from '../src/shared/bridge';
 
 /** 日志根目录：打包版 → 安装目录\Logs；开发版 → 项目根\Logs（与 main.ts 的 INSTALL_ROOT 分流一致）。 */
-const LOG_ROOT = join(app.isPackaged ? dirname(process.execPath) : join(__dirname, '..', '..'), 'Logs');
+// [macOS R2] darwin 打包态跟随 main.ts 数据根迁到 Application Support（.app 内只读）。
+//   此处在模块顶层执行，早于 main.ts 的 app.setPath('userData', …)，故 userData 仍是默认值，
+//   与 main.ts 的 DATA_ROOT 一致。
+const LOG_ROOT = join(
+  app.isPackaged
+    ? (process.platform === 'darwin' ? app.getPath('userData') : dirname(process.execPath))
+    : join(__dirname, '..', '..'),
+  'Logs',
+);
 
 /** 按天翻篇的文件名：backend_YYYYMMDD.log（与 main.ts 统一日志同目录同命名；旧文件由 main.ts 启动时统一清理）。 */
 function logFileName(date: Date): string {

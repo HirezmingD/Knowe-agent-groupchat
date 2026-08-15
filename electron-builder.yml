@@ -52,6 +52,17 @@ win:
       arch:
         - x64
 
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+
 nsis:
   # 向导式安装（非一键）：允许用户选安装目录
   oneClick: false

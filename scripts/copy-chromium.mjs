@@ -18,7 +18,7 @@
  * 幂等：目标已存在且完整时跳过。
  */
 
-import { existsSync, statSync, readdirSync } from 'node:fs';
+import { existsSync, statSync, readdirSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,8 +27,11 @@ import { spawnSync } from 'node:child_process';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST_BACKEND = join(ROOT, 'dist', 'KnoweBackend');
 
-/** 开发机 playwright 浏览器缓存根（playwright 库原生定位路径） */
-const MS_PLAYWRIGHT_ROOT = join(homedir(), 'AppData', 'Local', 'ms-playwright');
+/** 开发机 playwright 浏览器缓存根（playwright 库原生定位路径）。 */
+//   [macOS R4] 按平台：win32 = %USERPROFILE%\AppData\Local\ms-playwright，darwin = ~/Library/Caches/ms-playwright。
+const MS_PLAYWRIGHT_ROOT = process.platform === 'win32'
+  ? join(homedir(), 'AppData', 'Local', 'ms-playwright')
+  : join(homedir(), 'Library', 'Caches', 'ms-playwright');
 
 function backendExpectedRevision() {
   // 用后端 Python 读 playwright 的期望浏览器 revision（单一事实源）。
@@ -102,15 +105,25 @@ async function main() {
   console.log(`[copy-chromium] 拷贝 headless_shell rev ${rev}（${(dirSize(src) / 1024 / 1024).toFixed(0)}MB）`);
   console.log(`  源：${src}`);
   console.log(`  目标：${dst}`);
-  // 大目录（271MB、数万文件）用 robocopy（Windows 原生，业界标准）：
-  //   - /E 递归含空目录、/COPY:DAT 复制数据+属性+时间戳、/R:1 失败重试1次、/W:1 等待1秒
-  //   - robocopy 退出码 0-7 都是成功（8+ 才是失败）
-  const r = spawnSync('robocopy', [src, dst, '/E', '/COPY:DAT', '/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'], {
-    encoding: 'utf8',
-  });
-  if (r.error || (r.status ?? 0) >= 8) {
-    console.error('[copy-chromium] robocopy 失败：', r.error?.message ?? `exit ${r.status}`);
-    process.exit(1);
+  // 大目录（271MB、数万文件）拷贝，按平台选命令：
+  //   - win32：robocopy（Windows 原生，业界标准）/E 递归含空目录、/COPY:DAT 数据+属性+时间戳、
+  //     /R:1 失败重试1次、/W:1 等待1秒；robocopy 退出码 0-7 都是成功（8+ 才是失败）
+  //   - darwin：cp -R（POSIX 原生，递归拷贝）；先建父目录（cp 不自动建）
+  if (process.platform === 'win32') {
+    const r = spawnSync('robocopy', [src, dst, '/E', '/COPY:DAT', '/R:1', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'], {
+      encoding: 'utf8',
+    });
+    if (r.error || (r.status ?? 0) >= 8) {
+      console.error('[copy-chromium] robocopy 失败：', r.error?.message ?? `exit ${r.status}`);
+      process.exit(1);
+    }
+  } else {
+    mkdirSync(dirname(dst), { recursive: true });
+    const r = spawnSync('cp', ['-R', src, dst], { encoding: 'utf8' });
+    if (r.error || (r.status ?? 0) !== 0) {
+      console.error('[copy-chromium] cp -R 失败：', r.error?.message ?? `exit ${r.status}`);
+      process.exit(1);
+    }
   }
   console.log(`[copy-chromium] 完成：${(dirSize(dst) / 1024 / 1024).toFixed(0)}MB 已就位`);
 }

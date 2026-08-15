@@ -29,6 +29,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { roleLabel, memberNameLabel } from '../shared/roleLabel';
+import { IS_MAC } from '../shared/platform';
 import { createSocket, initWsAuthToken } from '../transport/socket';
 import { warmUpIncremental } from '../store/incrementalSync';   // [v1.0.23.6] 启动预热
 import { record as recordDiagnostic } from '../observe/corridor';
@@ -551,27 +552,31 @@ export const App: React.FC = () => {
           <header className="titlebar">
             <div className="title-mid" />
             <div className="traffic">
-              <button
-                type="button"
-                className="tl tl-minimize"
-                title={t('app.05')}
-                aria-label={t('app.06')}
-                onClick={() => invokeWindowControl('minimize')}
-              />
-              <button
-                type="button"
-                className="tl tl-maximize"
-                title={t('app.03')}
-                aria-label={t('app.04')}
-                onClick={() => invokeWindowControl('toggle-maximize')}
-              />
-              <button
-                type="button"
-                className="tl tl-close"
-                title={t('app.01')}
-                aria-label={t('app.02')}
-                onClick={() => invokeWindowControl('close')}
-              />
+              {!IS_MAC && (
+                <>
+                  <button
+                    type="button"
+                    className="tl tl-minimize"
+                    title={t('app.05')}
+                    aria-label={t('app.06')}
+                    onClick={() => invokeWindowControl('minimize')}
+                  />
+                  <button
+                    type="button"
+                    className="tl tl-maximize"
+                    title={t('app.03')}
+                    aria-label={t('app.04')}
+                    onClick={() => invokeWindowControl('toggle-maximize')}
+                  />
+                  <button
+                    type="button"
+                    className="tl tl-close"
+                    title={t('app.01')}
+                    aria-label={t('app.02')}
+                    onClick={() => invokeWindowControl('close')}
+                  />
+                </>
+              )}
             </div>
           </header>
 
