@@ -63,6 +63,11 @@ mac:
       arch:
         - arm64
 
+# [macOS R9] 打包后对 mac app 做 ad-hoc 签名（生成 CMS blob），否则 linker-signed
+#   产物在 macOS 14 被判「将对你的电脑造成伤害」、连「仍要打开」都不给。
+#   见 scripts/after-pack-sign.cjs。
+afterPack: scripts/after-pack-sign.cjs
+
 nsis:
   # 向导式安装（非一键）：允许用户选安装目录
   oneClick: false
