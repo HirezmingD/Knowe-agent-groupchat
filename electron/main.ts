@@ -1736,7 +1736,7 @@ function createWindow(): void {
     //   （标题栏文字消失、窗口内容仍顶到顶），但让**系统原生红黄绿 traffic lights**
     //   浮在左上角——其余布局（.titlebar 拖拽区、.clist/.main 间距）一概不动；
     //   渲染端据此不再自绘右侧 .traffic（见 App.tsx 的 IS_MAC 分支）。
-    frame: process.platform !== 'darwin',
+    frame: false,
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
     title: 'Knowe',
     // APP 窗口/任务栏图标：public/brand/app-icon.png（由 fix-assets 脚本从 Knowe图标2.png 复制而来）
