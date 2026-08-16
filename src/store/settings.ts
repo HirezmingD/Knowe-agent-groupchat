@@ -261,7 +261,7 @@ function acknowledgedBinding(
 }
 
 function persistedBinding(binding: ModelBinding | null): ModelBinding | null {
-  if (!binding) return null;
+  if (!binding || !binding.sealed) return null;
   return {
     ...binding,
     apiKey: '',
@@ -746,7 +746,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'knowe-settings-v1',
       storage: createJSONStorage(() => localStorage),
-      version: 2,
+      version: 3,
       migrate: (persistedState) => {
         const raw = asObject(persistedState);
         if (!raw) return persistedState as SettingsState;
@@ -761,12 +761,19 @@ export const useSettingsStore = create<SettingsState>()(
           };
         };
         const agents = asObject(raw.agentModels);
+        // [v1.0.36 修复] sealed:false = 未确认的编辑草稿，不应持久化生效。
+        // 升级时把历史残留的草稿态归一化为 null（跟随），前端显示与测试连接语义对齐。
+        const dropDraft = (value: unknown): unknown => {
+          const binding = asObject(value);
+          if (binding && binding.sealed === false) return null;
+          return value;
+        };
         return {
           ...raw,
-          mainModel: redactLegacyBinding(raw.mainModel),
-          auxModel: redactLegacyBinding(raw.auxModel),
+          mainModel: dropDraft(redactLegacyBinding(raw.mainModel)),
+          auxModel: dropDraft(redactLegacyBinding(raw.auxModel)),
           agentModels: Object.fromEntries(
-            Object.entries(agents ?? {}).map(([key, value]) => [key, redactLegacyBinding(value)]),
+            Object.entries(agents ?? {}).map(([key, value]) => [key, dropDraft(redactLegacyBinding(value))]),
           ),
         } as unknown as SettingsState;
       },
