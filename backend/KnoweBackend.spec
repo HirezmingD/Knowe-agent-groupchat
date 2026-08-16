@@ -81,7 +81,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "tests", "IPython"],
+    excludes=["pytest", "tests", "IPython", "numpy", "scipy", "mkl", "mkl_fft", "mkl_random", "mkl-service"],
     noarchive=False,
     optimize=0,
 )

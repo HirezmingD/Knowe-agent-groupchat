@@ -10,7 +10,7 @@ Version line: **v0.1 (prototype) → v0.2 (React rewrite) → v1.0 (productizati
 
 ## v1.0.x — Productization
 
-### v1.0.36 (2026-08-14)
+### v1.0.36 (2026-08-16)
 
 **Custom API (core)**
 - Model binding now supports a "Custom" provider for OpenAI-compatible endpoints (local / relay / token-plan): pick "Custom" to freely enter a Base URL and model name
