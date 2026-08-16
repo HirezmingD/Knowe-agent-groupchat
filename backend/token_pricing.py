@@ -347,8 +347,14 @@ MODEL_PRICING: Final[Mapping[str, Mapping[str, ModelPricing]]] = MappingProxyTyp
 )
 
 
+# [customAPI] 官方价格表的 provider 集合（casefold）。不在其中（如自定义端点 custom）的用量
+# 不参与官方价格匹配，一律按「暂无价格」处理——避免自定义 URL 的模型名撞官方目录时被错算官方价。
+OFFICIAL_PROVIDERS: Final[frozenset[str]] = frozenset(p.casefold() for p in _RAW)
+
+
 def get_model_pricing(
     model: str, currency: str = "CNY", now: datetime | None = None,
+    provider: str | None = None,
 ) -> ModelPricing | None:
     """Return an exact model entry for one currency; unknown *entry* and absent model differ.
 
@@ -357,6 +363,8 @@ def get_model_pricing(
     peak window (defaults to the current UTC time).
     """
     if not isinstance(model, str):
+        return None
+    if provider is not None and provider.strip().casefold() not in OFFICIAL_PROVIDERS:
         return None
     key = model.strip()
     entries = MODEL_PRICING.get(key)
@@ -389,6 +397,7 @@ def estimate_cost(
     output: int = 0,
     currency: str = "CNY",
     now: datetime | None = None,
+    provider: str | None = None,
 ) -> float | None:
     """Estimate one call's cost, or ``None`` when exact pricing is unavailable.
 
@@ -398,7 +407,7 @@ def estimate_cost(
     billed at the standard input rate for every input token.
     ``now`` pins the peak/off-peak window for DeepSeek (defaults to now).
     """
-    pricing = get_model_pricing(model, currency, now=now)
+    pricing = get_model_pricing(model, currency, now=now, provider=provider)
     if pricing is None or not pricing.known:
         return None
     try:
@@ -452,9 +461,10 @@ def estimate_cost_usd(
 
 def pricing_payload(
     model: str, currency: str = "CNY", now: datetime | None = None,
+    provider: str | None = None,
 ) -> dict[str, object]:
     """JSON-safe metadata for the frontend's model/pricing section."""
-    pricing = get_model_pricing(model, currency, now=now)
+    pricing = get_model_pricing(model, currency, now=now, provider=provider)
     if pricing is None:
         return {
             "model": model,

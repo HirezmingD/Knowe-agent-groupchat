@@ -797,8 +797,8 @@ _CHEAP_TIER: dict[str, str] = {
     "xai": "grok-4.20-0309-non-reasoning",
     "anthropic": "claude-haiku-4-5-20251001",
     "openai-api": "gpt-5.4-nano",
-    "gemini": "gemini-3.5-flash",
-    "nvidia": "nvidia/nemotron-3-nano-30b-a3b",
+    "gemini": "gemini-3.6-flash",
+    "nvidia": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     "huggingface": "XiaomiMiMo/MiMo-V2-Flash",
     "novita": "deepseek/deepseek-v3-0324",
     "arcee": "trinity-mini",
@@ -821,6 +821,8 @@ def aux_effective() -> dict[str, str] | None:
     if not main:
         return None
     derived = dict(main)
+    # [customAPI] custom 等非官方 provider 不在 _CHEAP_TIER → 回退主模型名 = 完整跟随语义
+    # （有意为之：自定义端点无便宜档，唯一合理语义是复用主模型配置，非漏网）。
     derived["model"] = _CHEAP_TIER.get(main.get("provider", ""), main.get("model", ""))
     return derived
 

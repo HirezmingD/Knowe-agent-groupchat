@@ -20,6 +20,7 @@ import {
   useTokenUsageStore,
 } from '../store/tokenUsage';
 import { RangeCalendar, localDateKey } from './RangeCalendar';
+import { isCustomProvider } from '../store/modelCatalog';
 
 const NUMBER_FORMAT = new Intl.NumberFormat('zh-CN');
 
@@ -960,7 +961,7 @@ export const TokenUsagePanel: React.FC = () => {
                 modelRows.map((row: TokenUsageModel, index: number) => (
                   <DetailRow
                     key={row.model}
-                    name={row.model}
+                    name={isCustomProvider(row.provider) ? `${row.model} (${t('token.usage.panel.customSuffix')})` : row.model}
                     calls={row.calls}
                     hit={row.cache_hit_input}
                     miss={row.cache_miss_input}

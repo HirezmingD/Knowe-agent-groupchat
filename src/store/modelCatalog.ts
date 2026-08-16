@@ -485,3 +485,19 @@ export function cheapTierOf(slug: string): string {
   if (!p) return '';
   return p.cheap || p.models[p.models.length - 1] || '';
 }
+
+/**
+ * [v1.0.36] 自定义 OpenAI 兼容端点（本地 / 中转 / Token Plan）。
+ *
+ * 不进 PROVIDERS 目录：该目录逐条照搬上游模型目录（见文件头注释），custom 没有
+ * 静态 baseUrl / models / cheap，硬塞进目录会污染「原文照搬」原则。故只在 UI 层
+ * 特殊处理（ModelBindingModule 下拉置顶 + 联动逻辑），后端 binding 仍走
+ * provider='custom' + 用户填的 base_url + model，与官方提供商同一套链路。
+ */
+export const CUSTOM_PROVIDER_SLUG = 'custom';
+
+export const CUSTOM_PROVIDER_LABEL_KEY = 'model.binding.custom.label';
+
+export function isCustomProvider(slug: string): boolean {
+  return slug === CUSTOM_PROVIDER_SLUG;
+}

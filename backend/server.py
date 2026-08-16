@@ -1739,14 +1739,14 @@ class KnoweServer:
                 cache_hit_input=buckets["cache_hit_input"],
                 cache_miss_input=buckets["cache_miss_input"],
                 output=buckets["output"],
-                currency="CNY",
+                currency="CNY", provider=provider,
             )
             usd_cost = estimate_cost(
                 model,
                 cache_hit_input=buckets["cache_hit_input"],
                 cache_miss_input=buckets["cache_miss_input"],
                 output=buckets["output"],
-                currency="USD",
+                currency="USD", provider=provider,
             )
             if cny_cost is not None:
                 record["price_cny"] = cny_cost

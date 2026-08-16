@@ -10,6 +10,21 @@ Version line: **v0.1 (prototype) → v0.2 (React rewrite) → v1.0 (productizati
 
 ## v1.0.x — Productization
 
+### v1.0.36 (2026-08-14)
+
+**Custom API (core)**
+- Model binding now supports a "Custom" provider for OpenAI-compatible endpoints (local / relay / token-plan): pick "Custom" to freely enter a Base URL and model name
+- Base URL validated to start with http:// or https:// before saving / testing
+- Auxiliary model follows the main model for custom providers (no cheap-tier mapping → reuses the main model config), with a UI note showing what is currently effective
+
+**Token pricing distinguishes custom providers**
+- Usage from non-official providers (custom endpoints) no longer matches official catalog prices — shown as "no price" instead of mis-billing against an official model that happens to share the same name
+- Token usage panel labels custom-provider model rows with a "custom" suffix
+- Agent-level cost no longer nulls out entirely when some usage is unpriced; priced portion is still summed and shown, unpriced portion is flagged separately
+- Fixed cheap-tier mapping drift (gemini / nvidia tiers aligned with the current catalog)
+
+Version bumped to 1.0.36
+
 ### v1.0.35 (2026-08-14)
 
 **Approval-card misplacement — root-cause fix (core)**

@@ -1,7 +1,7 @@
 {
   "x-knowe-implementation": "[v1.0.13][R5]",
   "name": "knowe",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "private": true,
   "license": "MIT",
   "description": "Command your Agent team through group chat",

@@ -12,7 +12,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { featureEnabled } from '../shared/featureFlags';
 import { runtimeHttpBase } from '../shared/runtimeEndpoints';
 import { runtimeFetch } from '../shared/runtimeFetch';
-import { cheapTierOf, migrateModelName, providerOf } from './modelCatalog';
+import { cheapTierOf, migrateModelName, providerOf, isCustomProvider } from './modelCatalog';
 import i18n, { normalizeLanguage } from '../i18n'; // [v1.0.21.3] 语言校验（i18n 不依赖 settings，无环）
 import { DEFAULT_AVATAR_DATA_URL } from './defaultAvatar'; // [v1.0.23.5] 首次安装默认头像
 
@@ -26,6 +26,8 @@ export interface ModelBinding {
   hasApiKey?: boolean;
   /** Explicit user intent; an empty apiKey alone always means "preserve the current key". */
   clearApiKey?: boolean;
+  /** [v1.0.36] 自定义端点接入点（provider='custom' 时用户填；固定提供商为空、从目录取）。 */
+  baseUrl?: string;
   sealed: boolean;
 }
 
@@ -111,6 +113,10 @@ export function effectiveAuxBinding(
 ): (ModelBinding & { derived: boolean }) | null {
   if (aux && aux.sealed) return { ...aux, derived: false };
   if (main && main.sealed) {
+    // [v1.0.36] 自定义端点无便宜档，辅助跟随 = 完整复用主模型配置（含 baseUrl/key/模型）。
+    if (isCustomProvider(main.provider)) {
+      return { ...main, derived: true };
+    }
     const cheap = cheapTierOf(main.provider) || main.model;
     return {
       provider: main.provider,
@@ -185,7 +191,7 @@ function bindingWire(b: ModelBinding | null | undefined): JsonObject | null {
   const wire: JsonObject = {
     provider: b.provider,
     model: b.model,
-    base_url: provider?.baseUrl ?? '',
+    base_url: b.baseUrl ?? provider?.baseUrl ?? '',
     transport: provider?.transport ?? 'openai_chat',
   };
   // A redacted binding deliberately sends no credential field at all.  The backend may preserve
@@ -216,6 +222,7 @@ function bindingFromBackend(
     apiKey: transientKey,
     hasApiKey: backendHasKey,
     clearApiKey: false,
+    baseUrl: stringValue(raw.base_url).trim(),
     sealed: true,
   };
 }
@@ -320,7 +327,10 @@ function buildWirePayload(s: SettingsState): JsonObject {
   return {
     user_name: s.userName,
     main_model: bindingWire(s.mainModel),
-    aux_model: bindingWire(effectiveAuxBinding(s.mainModel, s.auxModel)),
+    // [v1.0.36] auxModel=null（跟随态）时发 null，不再把「派生便宜档」发给后端持久化——
+    // 否则后端存了派生值，派活/对账都会把它当「显式设置」用，辅助模型就冻结在旧主模型的便宜档。
+    // 后端 aux_effective 在 aux_model 为空时按主模型运行时派生（_CHEAP_TIER / custom 完整跟随）。
+    aux_model: bindingWire(s.auxModel),
     agent_models: agentModels,
     approval_timeout_s: s.approvalTimeoutS,
     group_approval_timeouts: { ...s.groupApprovalTimeouts },
@@ -525,7 +535,10 @@ async function reconcileSettings(): Promise<ModelApplyResult> {
     if (backendMain) {
       useSettingsStore.setState({
         mainModel: backendMain,
-        auxModel: backendAux,
+        // [v1.0.36] auxModel 为 null = 用户从未显式设置辅助模型（跟随主模型）。
+        // 后端 aux_model 存的是 buildWirePayload 发过去的「派生便宜档」，reconcile 回传会把它
+        // 当成「显式设置」污染掉跟随态——null 时保持 null，不覆盖用户意图。
+        auxModel: state.auxModel ? backendAux : null,
         agentModels: backendAgents,
         userName: stringValue(body.user_name).trim() || state.userName,
         approvalTimeoutS: numberValue(body.approval_timeout_s, state.approvalTimeoutS),
@@ -631,7 +644,16 @@ export const useSettingsStore = create<SettingsState>()(
       },
       editAuxModel(): void {
         const current = get().auxModel;
-        if (current) set({ auxModel: { ...current, sealed: false }, modelApplyState: 'stale' });
+        if (current) {
+          set({ auxModel: { ...current, sealed: false }, modelApplyState: 'stale' });
+          return;
+        }
+        // [v1.0.36] 未设置 + 跟随态：用跟随值作编辑种子进入编辑态（清除 derived 标记）。
+        const eff = effectiveAuxBinding(get().mainModel, null);
+        const seed: ModelBinding = eff
+          ? { provider: eff.provider, model: eff.model, apiKey: eff.apiKey, hasApiKey: eff.hasApiKey, clearApiKey: false, baseUrl: eff.baseUrl, sealed: false }
+          : { provider: '', model: '', apiKey: '', hasApiKey: false, clearApiKey: false, baseUrl: '', sealed: false };
+        set({ auxModel: seed, modelApplyState: 'stale' });
       },
       clearAuxModel(): void {
         set({ auxModel: null, modelApplyState: 'stale' });
@@ -789,15 +811,21 @@ export interface TestResult {
  * 后端 /settings/test 接受 binding 整体，与 testModelConnection 同一条通道。
  */
 export async function testBinding(
-  b: { provider: string; model: string; apiKey: string },
+  b: { provider: string; model: string; apiKey: string; baseUrl?: string },
+  target: 'main' | 'aux' = 'main',
 ): Promise<TestResult> {
   if (!b.provider || !b.model) {
     return { ok: false, message: i18n.t('settings.07') };
+  }
+  // [v1.0.36] 自定义端点的 Base URL 格式校验：非空则必须 http(s):// 开头，否则友好提示、不发请求。
+  if (isCustomProvider(b.provider) && b.baseUrl && !/^https?:\/\//i.test(b.baseUrl.trim())) {
+    return { ok: false, message: i18n.t('model.binding.custom.baseUrlInvalid') };
   }
   const wire: ModelBinding = {
     provider: b.provider,
     model: b.model,
     apiKey: b.apiKey.trim(),
+    baseUrl: b.baseUrl?.trim(),
     hasApiKey: Boolean(b.apiKey.trim()),
     clearApiKey: false,
     sealed: true,
@@ -806,7 +834,7 @@ export async function testBinding(
     const response = await runtimeFetch(`${runtimeHttpBase()}/settings/test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target: 'main', binding: bindingWire(wire) }),
+      body: JSON.stringify({ target, binding: bindingWire(wire) }),
     });
     const body = asObject(await response.json().catch(() => null));
     if (!response.ok || !body) {
@@ -839,5 +867,5 @@ export async function testModelConnection(target: 'main' | 'aux'): Promise<TestR
       message: target === 'main' ? i18n.t('settings.07') : i18n.t('settings.18'),
     };
   }
-  return testBinding(binding);
+  return testBinding(binding, target);
 }

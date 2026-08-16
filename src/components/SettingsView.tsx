@@ -394,6 +394,8 @@ const ModelsPane: React.FC = () => {
         <h4>{t('global.search.13')}</h4>
         <ModelBindingModule
           binding={auxModel}
+          followBinding={auxEffective}
+          followNote={t('settings.view.auxFollowNote')}
           onSave={(b) => {
             invalidateTestResult();
             saveAuxModel(b);

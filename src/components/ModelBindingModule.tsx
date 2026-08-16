@@ -20,7 +20,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { PROVIDERS, modelsOf } from '../store/modelCatalog';
+import { PROVIDERS, modelsOf, providerOf, CUSTOM_PROVIDER_SLUG, CUSTOM_PROVIDER_LABEL_KEY, isCustomProvider } from '../store/modelCatalog';
 import type { ModelBinding, TestResult } from '../store/settings';
 import { testBinding } from '../store/settings'; // [v1.0.24.1] 确认后自动测连接
 import { useTranslation } from 'react-i18next';
@@ -134,7 +134,7 @@ interface Props {
   followNote?: string;
   /** followNote 场景下用于展示的全局绑定。 */
   followBinding?: ModelBinding | null;
-  onSave: (b: { provider: string; model: string; apiKey: string }) => void;
+  onSave: (b: { provider: string; model: string; apiKey: string; baseUrl?: string }) => void;
   onEdit: () => void;
   /** 「确定」按钮旁的额外元素（比如「清除个性化」）。 */
   extraAction?: React.ReactNode;
@@ -156,11 +156,13 @@ export const ModelBindingModule: React.FC<Props> = ({
   // ── 草稿态（编辑时用；binding 变化 → 重新播种）──
   const [provider, setProvider] = useState(shown?.provider ?? '');
   const [model, setModel] = useState(shown?.model ?? '');
+  const [baseUrl, setBaseUrl] = useState(shown?.baseUrl ?? '');
   const [apiKey, setApiKey] = useState(shown?.apiKey ?? '');
 
   useEffect(() => {
     setProvider(shown?.provider ?? '');
     setModel(shown?.model ?? '');
+    setBaseUrl(shown?.baseUrl ?? '');
     setApiKey(shown?.apiKey ?? '');
     // 封存态切换 / 换目标（per-Agent 换人）时，草稿跟着已存值走。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,7 +170,7 @@ export const ModelBindingModule: React.FC<Props> = ({
 
   const frozen = sealed || following;
   const models = modelsOf(provider);
-  const canSave = !!provider && !!model && !!apiKey.trim();
+  const canSave = !!provider && !!model && !!apiKey.trim() && (!isCustomProvider(provider) || !!baseUrl.trim());
 
   // [v1.0.24.1] 确认后自动测试连接：结果展示在按钮右侧。
   // 只监听 provider/model：保存后播种草稿时 apiKey 会被清空（后端不回传 key），
@@ -178,8 +180,8 @@ export const ModelBindingModule: React.FC<Props> = ({
   useEffect(() => { setTestResult(null); }, [provider, model]);
 
   const handleConfirm = (): void => {
-    onSave({ provider, model, apiKey: apiKey.trim() });
-    const payload = { provider, model, apiKey: apiKey.trim() };
+    onSave({ provider, model, apiKey: apiKey.trim(), baseUrl: baseUrl.trim() });
+    const payload = { provider, model, apiKey: apiKey.trim(), baseUrl: baseUrl.trim() };
     setTesting(true);
     setTestResult(null);
     void testBinding(payload)
@@ -192,6 +194,7 @@ export const ModelBindingModule: React.FC<Props> = ({
   const changeProvider = (slug: string): void => {
     setProvider(slug);
     setModel('');
+    setBaseUrl(isCustomProvider(slug) ? '' : (providerOf(slug)?.baseUrl ?? ''));
     setApiKey('');
   };
   const changeModel = (m: string): void => {
@@ -250,7 +253,9 @@ export const ModelBindingModule: React.FC<Props> = ({
               aria-expanded={providerOpen}
               aria-label={t('model.binding.module.02')}
             >
-              {providerEntry ? (
+              {isCustomProvider(providerSlug) ? (
+                <span className="mset-select-label">{t(CUSTOM_PROVIDER_LABEL_KEY)}</span>
+              ) : providerEntry ? (
                 <>
                   <FlagIcon kind={PROVIDER_FLAGS[providerEntry.slug]} />
                   <span className="mset-select-label">
@@ -272,6 +277,14 @@ export const ModelBindingModule: React.FC<Props> = ({
                   onClick={() => { changeProvider(''); setProviderOpen(false); }}
                 >
                   {t('model.binding.module.05')}
+                </div>
+                <div
+                  role="option"
+                  aria-selected={providerSlug === CUSTOM_PROVIDER_SLUG}
+                  className={'mset-select-opt mset-select-opt-custom' + (providerSlug === CUSTOM_PROVIDER_SLUG ? ' sel' : '')}
+                  onClick={() => { changeProvider(CUSTOM_PROVIDER_SLUG); setProviderOpen(false); }}
+                >
+                  <span>{t(CUSTOM_PROVIDER_LABEL_KEY)}</span>
                 </div>
                 {sortedProviders.map((p) => (
                   <div
@@ -296,10 +309,45 @@ export const ModelBindingModule: React.FC<Props> = ({
 
       <div className="set-item">
         <div className="si-body">
+          <div className="si-t">{t('model.binding.custom.baseUrl')}</div>
+          <div className="si-d">{t('model.binding.custom.baseUrlHint')}</div>
+        </div>
+        <div className="set-ctrl">
+          <div className="field pw mset-field">
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={frozen ? '' : t('model.binding.custom.baseUrlPlaceholder')}
+              value={frozen ? (shown?.baseUrl || providerOf(shown?.provider ?? '')?.baseUrl || '') : baseUrl}
+              disabled={frozen || !isCustomProvider(providerSlug)}
+              onChange={(e) => { setBaseUrl(e.target.value); setTestResult(null); }}
+              aria-label={t('model.binding.custom.baseUrl')}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="set-item">
+        <div className="si-body">
           <div className="si-t">{t('common.18')}</div>
           <div className="si-d">{t('model.binding.module.12')}</div>
         </div>
         <div className="set-ctrl">
+          {isCustomProvider(providerSlug) ? (
+            <div className="field pw mset-field">
+              <input
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={frozen ? '' : t('model.binding.custom.modelPlaceholder')}
+                value={frozen ? (modelSlug || '') : model}
+                disabled={frozen}
+                onChange={(e) => { setModel(e.target.value); setTestResult(null); }}
+                aria-label={t('common.18')}
+              />
+            </div>
+          ) : (
           <div className="mset-select" ref={modelBoxRef}>
             <button
               type="button"
@@ -339,6 +387,7 @@ export const ModelBindingModule: React.FC<Props> = ({
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
 

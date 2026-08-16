@@ -1974,11 +1974,11 @@ class ProjectEngine:
                 record["projected_message_count"] = projected_count
             cny_cost = estimate_cost(
                 model, cache_hit_input=hit, cache_miss_input=miss, output=output,
-                currency="CNY",
+                currency="CNY", provider=provider,
             )
             usd_cost = estimate_cost(
                 model, cache_hit_input=hit, cache_miss_input=miss, output=output,
-                currency="USD",
+                currency="USD", provider=provider,
             )
             if cny_cost is not None:
                 record["price_cny"] = cny_cost
@@ -2058,11 +2058,11 @@ class ProjectEngine:
             }
         cny_cost = estimate_cost(
             model, cache_hit_input=hit, cache_miss_input=miss, output=output,
-            currency="CNY",
+            currency="CNY", provider=provider,
         )
         usd_cost = estimate_cost(
             model, cache_hit_input=hit, cache_miss_input=miss, output=output,
-            currency="USD",
+            currency="USD", provider=provider,
         )
         if cny_cost is not None:
             record["price_cny"] = cny_cost

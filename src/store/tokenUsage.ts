@@ -87,6 +87,7 @@ export interface TokenUsagePricing {
 }
 
 export interface TokenUsageModel {
+  provider: string;
   model: string;
   total_input: number;
   total_output: number;
@@ -236,6 +237,7 @@ function normalizeModels(value: unknown): TokenUsageModel[] {
     const output = nonNegativeInt(row.total_output);
     const hit = nonNegativeInt(row.cache_hit_input);
     return [{
+      provider: typeof row.provider === 'string' ? row.provider.trim() : '',
       model,
       total_input: input,
       total_output: output,

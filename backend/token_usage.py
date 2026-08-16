@@ -464,7 +464,10 @@ def aggregate_token_usage(
         agent["calls"] += 1
 
         model_name = row["model"]
-        model = model_map.setdefault(model_name, {
+        provider = str(row.get("provider") or "").strip() or "unknown"
+        model_key = f"{provider}\u0000{model_name}"
+        model = model_map.setdefault(model_key, {
+            "provider": provider,
             "model": model_name,
             "total_input": 0,
             "total_output": 0,
@@ -491,12 +494,12 @@ def aggregate_token_usage(
         if cny_cost is None:
             cny_cost = estimate_cost(
                 model_name, cache_hit_input=hit, cache_miss_input=miss, output=output,
-                currency="CNY",
+                currency="CNY", provider=provider,
             )
         if usd_cost is None:
             usd_cost = estimate_cost(
                 model_name, cache_hit_input=hit, cache_miss_input=miss, output=output,
-                currency="USD",
+                currency="USD", provider=provider,
             )
         if cny_cost is None and usd_cost is None:
             unpriced_tokens += total_tokens
@@ -527,14 +530,10 @@ def aggregate_token_usage(
             from .i18n_backend import msg  # 局部导入：避免模块级语言固化
             resolved = msg("token.001") if agent_id == "coordinator" else (role or agent_id)
         agent["name"] = resolved
-        # [v1.0.20.3] 按 Agent 金额终值化：该 agent 用过无价模型 → 金额为 None（与 totals 口径一致）；
-        # 全部有价 → 累计金额四舍五入到分。
-        agent["estimated_cost_cny"] = (
-            None if agent["unpriced_tokens"] > 0 else round(agent["estimated_cost_cny"], 2)
-        )
-        agent["estimated_cost_usd"] = (
-            None if agent["unpriced_tokens"] > 0 else round(agent["estimated_cost_usd"], 2)
-        )
+        # [v1.0.36] 按 Agent 金额终值化：有价部分照常累加显示，无价（自定义）部分不统计——
+        # 不再因用过无价模型整体置 None；「部分无价」由 unpriced_tokens 字段供前端标注。
+        agent["estimated_cost_cny"] = round(agent["estimated_cost_cny"], 2)
+        agent["estimated_cost_usd"] = round(agent["estimated_cost_usd"], 2)
 
     for model in model_map.values():
         model_name = str(model["model"])
@@ -545,21 +544,22 @@ def aggregate_token_usage(
         model["estimated_cost_usd"] = (
             None if model["unpriced_tokens"] > 0 else round(model["estimated_cost_usd"], 2)
         )
-        model["pricing"] = pricing_payload(model_name)
+        model["pricing"] = pricing_payload(model_name, provider=model["provider"])
 
     total_tokens = total_input + total_output
     total_calls = len(clean)
-    estimated_cost_cny: float | None
-    estimated_cost_usd: float | None
-    if unpriced_tokens > 0:
-        estimated_cost_cny = None
-        estimated_cost_usd = None
-    else:
-        estimated_cost_cny = round(priced_cost_cny, 2)
-        estimated_cost_usd = round(priced_cost_usd, 2)
+    estimated_cost_cny = round(priced_cost_cny, 2)
+    estimated_cost_usd = round(priced_cost_usd, 2)
 
     if not current_model and clean:
         current_model = str(clean[-1]["model"])
+    # [customAPI] 反查当前模型的 provider，用于价格匹配区分（custom 不匹配官方价）。
+    current_provider = ""
+    if current_model:
+        for _row in reversed(clean):
+            if str(_row.get("model") or "") == current_model:
+                current_provider = str(_row.get("provider") or "").strip() or "unknown"
+                break
 
     daily = [
         {"date": date, **bucket}
@@ -604,5 +604,5 @@ def aggregate_token_usage(
         "by_agent": by_agent,
         "by_model": by_model,
         "current_model": current_model,
-        "pricing": pricing_payload(current_model),
+        "pricing": pricing_payload(current_model, provider=current_provider),
     }
