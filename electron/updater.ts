@@ -12,7 +12,7 @@
  * 仅「手动检查更新」的失败推送 error 供设置页反馈。
  */
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, shell } from 'electron';
 // electron-updater 是 CommonJS 模块：ESM 命名导入（import { autoUpdater }）在 Electron 主进程
 // 运行时解析失败（SyntaxError: Named export not found——cjs-module-lexer 无法静态分析其导出）。
 // esModuleInterop 下 default import 拿到整个 module.exports，解构出 autoUpdater（官方建议写法）。
@@ -55,7 +55,9 @@ export function initAutoUpdater(hooks: { log: UpdaterLogger; onInstall: () => Pr
   initialized = true;
   const log = hooks.log;
 
-  autoUpdater.autoDownload = true;           // PRD 3.2：发现新版立即后台下载
+  // [macOS 手动下载] ad-hoc 签名无法走 ShipIt 静默安装（签名校验必失败），mac 上不后台下载
+  //   （下载了也装不上）；检查到新版直接引导去 GitHub 下载 dmg。Windows 保持后台下载 + 一键安装。
+  autoUpdater.autoDownload = process.platform !== 'darwin';
   autoUpdater.autoInstallOnAppQuit = false;  // PRD 3.4：用户手动触发安装
   autoUpdater.logger = null;                 // 静默（不往 electron-updater 默认 logger 刷屏）
 
@@ -63,8 +65,14 @@ export function initAutoUpdater(hooks: { log: UpdaterLogger; onInstall: () => Pr
     push({ state: 'checking', progress: 0 });
   });
   autoUpdater.on('update-available', (info) => {
-    log(`[updater] 发现新版本 ${info.version}，开始后台下载`);
-    push({ state: 'downloading', progress: 0, version: info.version });
+    if (process.platform === 'darwin') {
+      // [macOS 手动下载] 不下载，直接进 ready（语义 = 有新版可去下载），前端显示「去下载」按钮
+      log(`[updater] 发现新版本 ${info.version}（mac 手动下载模式，引导去 GitHub）`);
+      push({ state: 'ready', progress: 100, version: info.version });
+    } else {
+      log(`[updater] 发现新版本 ${info.version}，开始后台下载`);
+      push({ state: 'downloading', progress: 0, version: info.version });
+    }
   });
   autoUpdater.on('update-not-available', () => {
     // [v1.0.26.2] 手动检查无新版 → 推送 up-to-date 提示（2.5 秒后自动回 idle）；
@@ -128,6 +136,12 @@ export async function checkForUpdates(silent: boolean): Promise<void> {
  */
 export async function installUpdate(hooks: { onInstall: () => Promise<void> }): Promise<void> {
   if (status.state !== 'ready') return;
+  if (process.platform === 'darwin') {
+    // [macOS 手动下载] ad-hoc 签名无法走 ShipIt 静默安装，改为打开 GitHub 最新 release 下载页，
+    //   用户手动下载 dmg 拖入「应用程序」安装（数据在 Application Support，替换 app 外壳不丢数据）。
+    void shell.openExternal('https://github.com/HirezmingD/Knowe-agent-groupchat/releases/latest');
+    return;
+  }
   try {
     await hooks.onInstall();
   } catch (e) {

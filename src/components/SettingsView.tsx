@@ -18,6 +18,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { BackendStatus, UpdateStatus } from '../shared/bridge';
+import { IS_MAC } from '../shared/platform';
 import { useKnoweStore } from '../store/store';
 import {
   useSettingsStore, testModelConnection, effectiveAuxBinding,
@@ -651,7 +652,7 @@ const AboutPane: React.FC = () => {
           </button>
           {updateStatus.state === 'ready' && (
             <button type="button" className="test-btn set-update-install" onClick={installNow}>
-              {t('settings.view.restartInstall')}
+              {IS_MAC ? t('settings.view.goDownload') : t('settings.view.restartInstall')}
             </button>
           )}
         </div>

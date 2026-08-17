@@ -1221,6 +1221,7 @@
   "addAgents.cancel": "取消",
   "addAgents.clear": "清空",
   "settings.view.restartInstall": "重启安装更新",
+  "settings.view.goDownload": "去下载",
   "settings.view.autoUpdateDownloading": "发现新版本，正在后台下载…{percent}%",
   "settings.view.autoUpdateError": "检查更新失败，请稍后重试",
   "settings.view.autoUpdateJustUpdated": "已更新到最新版本",
