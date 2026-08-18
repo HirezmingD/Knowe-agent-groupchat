@@ -18,10 +18,24 @@ const { join } = require('path');
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return;
 
+  // [v1.0.36 签名升级] 有 Developer ID 证书时，electron-builder 走 identity 签名 + 公证，
+  //   这里不再 ad-hoc 签名（避免覆盖）；无证书时回退 ad-hoc（用户走「仍要打开」）。
+  let hasDevId = false;
+  try {
+    hasDevId = execSync('security find-identity -v -p codesigning', { encoding: 'utf8' })
+      .includes('Developer ID Application');
+  } catch {
+    // 探测失败按无证书处理
+  }
+
   const productFilename = context.packager.appInfo.productFilename; // "Knowe"
   const appPath = join(context.appOutDir, `${productFilename}.app`);
 
-  console.log(`[afterPack] macOS ad-hoc 签名：${appPath}`);
+  if (hasDevId) {
+    console.log('[afterPack] 检测到 Developer ID 证书，跳过 ad-hoc 签名（走 identity 签名 + 公证）');
+    return;
+  }
+  console.log(`[afterPack] 无 Developer ID 证书，回退 ad-hoc 签名：${appPath}`);
   execSync(`codesign --force --deep --sign - "${appPath}"`, { stdio: 'inherit' });
   console.log('[afterPack] ad-hoc 签名完成');
 };

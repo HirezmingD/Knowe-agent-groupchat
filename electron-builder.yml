@@ -55,6 +55,12 @@ win:
 mac:
   icon: build/icon.icns
   category: public.app-category.productivity
+  # [v1.0.36 签名升级] Developer ID 签名 + 公证（凭据走环境变量：
+  #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID）。
+  #   有证书时 electron-builder 用 identity 签名并自动公证；无证书时
+  #   after-pack-sign.cjs 回退 ad-hoc 签名（走「仍要打开」）。
+  identity: "Developer ID Application: hezhou jiang (SVT5CWKYR9)"
+  notarize: true
   target:
     - target: dmg
       arch:
