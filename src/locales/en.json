@@ -1221,7 +1221,6 @@
   "addAgents.cancel": "Cancel",
   "addAgents.clear": "Clear",
   "settings.view.restartInstall": "Restart & Install Update",
-  "settings.view.goDownload": "Download",
   "settings.view.autoUpdateDownloading": "New version found, downloading in background…{percent}%",
   "settings.view.autoUpdateError": "Update check failed, try again later",
   "settings.view.autoUpdateJustUpdated": "Updated to the latest version",
