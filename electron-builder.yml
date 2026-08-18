@@ -59,7 +59,7 @@ mac:
   #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID）。
   #   有证书时 electron-builder 用 identity 签名并自动公证；无证书时
   #   after-pack-sign.cjs 回退 ad-hoc 签名（走「仍要打开」）。
-  identity: "Developer ID Application: hezhou jiang (SVT5CWKYR9)"
+  identity: "hezhou jiang (SVT5CWKYR9)"
   notarize: true
   target:
     - target: dmg
