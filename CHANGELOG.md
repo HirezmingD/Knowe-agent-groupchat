@@ -10,6 +10,25 @@ Version line: **v0.1 (prototype) → v0.2 (React rewrite) → v1.0 (productizati
 
 ## v1.0.x — Productization
 
+### v1.0.37 (2026-08-18)
+
+**Prompt & workflow optimization (core)**
+- PM (coordinator) prompt slimmed by 74% (299→72 lines, zh/en in sync); typo fix「项目经历」→「项目经理」
+- Worker prompt localized: new `prompts/zh/worker_prompt.md` + `prompts/en/worker_prompt.md`, fixing Chinese-mode workers replying in English
+- 知知 (personal companion) humanized — companion role, no prohibition lists; incomplete English version fixed
+- Non-greedy task assignment (positive guidance, no prohibition lists)
+- Dead-file cleanup: deleted `identity_block.md` ×2, `souls/worker.txt`, `backend/worker_prompt.md`; engine no longer writes SOUL.md / IDENTITY.md
+
+**@tag & markdown input box (core)**
+- Composer input rewritten from textarea to TipTap rich text: @tag mentions (reused picker, caret-anchored popup) + 8 markdown quick-input rules + native right-click menu IPC
+- New `tiptapMarkdown` serializer: editor JSON ↔ markdown both ways (8 node types + mention), 16 unit tests
+- @tag insertion auto-appends a real space — caret no longer overlaps the capsule edge (browser draws caret on inline-block borders; CSS margin cannot fix it)
+- Bubble right-click copy respects selection (copy selection if selected inside the bubble, otherwise full text)
+- Native Electron edit menu (cut/copy/paste/selectAll) via preload bridge
+- Added @tiptap/react, starter-kit, extension-mention, extension-placeholder (^3.30.1)
+
+Version bumped to 1.0.37
+
 ### v1.0.36 (2026-08-16)
 
 **Custom API (core)**

@@ -67,7 +67,6 @@ a = Analysis(
         ("souls", "backend/souls"),
         ("prompts", "backend/prompts"),
         ("locales", "backend/locales"),
-        ("worker_prompt.md", "backend"),
     ],
     hiddenimports=[
         "playwright",

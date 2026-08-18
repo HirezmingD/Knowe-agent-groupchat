@@ -35,11 +35,9 @@ from .content_compress import snapshot_compression_stats  # [v1.0.34-M4] 压缩�
 from knowe_provenance import current_provenance_dict, normalize_provenance
 from knowe_harness import (
     CompletionAwareTaskRunRepository,
-    CompletionCommitter,
     CompletionProjector,
     CompletionStatus,
     completion_scope_id,
-    CoordinatorAction,
     DecisionEvent,
     DecisionType,
     SQLiteCompletionStore,
@@ -67,7 +65,6 @@ from .agent_identity import identity_for
 from .feature_flags import FeatureFlag, enabled as feature_enabled
 from .seen_speech import (
     SeenSpeechLedger, VisibleSpeech, notification_from_unknown,
-    render_seen_speech_block,
 )
 from .worker_completion import (
     CompletionViewV1, build_user_facing_completion,
@@ -495,96 +492,14 @@ _HISTORY_ATTRS = ("messages", "history", "_messages", "_history",
                   "conversation", "conversation_history", "message_history")
 _HISTORY_HOLDERS = ("loop", "_loop", "state", "_state", "core", "_core", "session")
 
-#: [v0.8a A-2] Worker 交了报告 → 塞给项目经理的那条通知
-#: [v0.21 问题一] 项目经理收到报告时的通知。
-#:
-#: 老版本在这里同时说了两句互相打架的话：
-#:     「别把报告原样再说一遍」 + 「用一两句点出**他做到了什么**、够不够、下一步」
-#: 对一件简单的活（改一行代码、抓一个网页）来说，「他做到了什么」**就是**报告本身——
-#: 于是这两句要求同一段话既复述又不复述。模型只能二选一，而它总是选那句**具体的**，
-#: 也就是复述。屏幕上就出现了用户投诉的那一幕：成员刚说完「XX 已改为 YY」，
-#: 项目经理紧接着说「XX 已完成，内容正确，验收通过」。
-#:
-#: **这不是模型不听话，是指令自相矛盾。** 所以这一版把提问方式整个换掉：
-#: 不问「他做到了什么」（那必然指向复述），只问「**用户还不知道什么**」——
-#: 一个只可能指向新信息的问题。再给它一条明确的退路（NOTHING_TO_ADD），
-#: 因为没有退路的模型一定会为了填满回合而说点什么。
-REPORT_NOTICE = (
-    INTERNAL_NOTE_HEADER
-    + msg("engine.009")
-    + msg("engine.010")
-    + msg("engine.011")
-    + "\n"
-    + msg("engine.013")
-    + msg("engine.014")
-    + msg("engine.015")
-    + msg("engine.016")
-    + msg("engine.017")
-    + msg("engine.018")
-    + msg("engine.019")
-    + msg("engine.020")
-    + msg("engine.021")
-    + "\n"
-    # ★ [v0.28] 这两行原来写的是：
-    #       「要派下一件活，**先跟用户说清楚再 propose_next**；……
-    #         **也不要在没跟用户交代之前就直接派活。**」
-    #
-    #   第二句比 v0.27 删掉的那四处都狠 —— 那四处是**允许**先说，这一句是**要求**先说，
-    #   否则不许调工具。它和 v0.27 的新规矩（调完 → NOTHING_TO_ADD，一个字都不说）
-    #   **正面对撞**。而 REPORT_NOTICE **成员每交一次报告就注入一次**，
-    #   而「审完报告 → 派下一件活」是整个产品里最常走的派活路径。
-    #   ——最常见的那条路上，代码每次都在教它先说话。
-    #
-    #   v0.27 我普查了「prompt 住在哪」（人设、工具描述、工具回执），漏了**引擎注入的通知**。
-    + msg("engine.022")
-    + msg("engine.023")
-    + msg("engine.024")
-)
-
-REPORT_SUMMARY_CLIP = 200
-
 # ═══════════════════════════════════════════════════════════════
-# [v0.29 问题四] Worker 的【工作中】非正常终止 → 自动 report_failed
+# [v0.29 问题四 → v1.0.37.2 R6/R7] Worker 非正常终止的失败告警
 #
-# ## 为什么这条通知必须存在
-#
-#   Worker 手上有活，然后：API 报错了 / 卡死被推了三次还是不动 / 用户按了「停止」。
-#   在 v0.28，这三条路各自 `discard(_workers_with_open_activity)` 就完事了——
-#   头像变灰，**项目经理从头到尾不知道发生过什么**。
-#   于是用户说「让他继续」，项目经理一头雾水：在他的世界里，那个人从来没停过，
-#   因为在他的世界里，那个人也从来没开始过。
-#
-# ## 为什么它长得像 REPORT_NOTICE，但不是 REPORT_NOTICE
-#
-#   两条通知都要让项目经理开口，但要他说的**是相反的两件事**：
-#     · REPORT_NOTICE  →「活干完了，用户还不知道什么？没有就闭嘴」
-#     · 这一条         →「活**没**干完，用户正等着，你必须给他一个交代」
-#   拿一条「已完成」的模板去承载一次失败，项目经理会照着模板去问「用户还不知道什么」，
-#   然后得出「没什么要说的」——那正是这个 bug 最坏的形态：**失败被静默地归档了**。
-#   所以这里**不给 NOTHING_TO_ADD 这条退路**：失败必须有人说出来。
-REPORT_FAILED_NOTICE = (
-    INTERNAL_NOTE_HEADER
-    + msg("engine.025")
-    + msg("engine.026")
-    + msg("engine.027")
-    + msg("engine.028")
-    + msg("engine.029")
-    + msg("engine.030")
-    + msg("engine.031")
-    + "\n"
-    + msg("engine.032")
-    + msg("engine.033")
-    + msg("engine.034")
-    + msg("engine.035")
-    + msg("engine.036")
-    + msg("engine.037")
-    + msg("engine.038")
-)
-
-#: [v0.29 问题四] 兜底：连失败报告都写不进磁盘时，通知里填这个占位。
-#:   写不了盘是运维问题，而「项目经理不知道有人失败了」是产品问题——
-#:   **绝不能因为前者，就把后者一起丢掉。**
-REPORT_FAILED_NO_FILE = msg("engine.039")
+#   Worker 手上有活，然后：API 报错了 / 卡死 / 用户按了「停止」。
+#   「失败必须有人说出来」是保命机制——失败不能静默归档。
+#   v1.0.37.2 起该语义由 _emit_completion_visible 的状态分流通知承担：
+#   FAILED/SYSTEM_ERROR/TIMED_OUT → engine.status.failed_notice（带原因）
+#   CANCELLED                      → engine.status.cancelled_notice（带原因，含「用户主动停止」）
 
 #: [v0.29 问题四] 各条失败路径的原因文案。写成常量是为了让「原因」这一格
 #:   在日志、报告、项目经理通知三处**逐字一致**——查起来能对得上。
@@ -833,10 +748,6 @@ def _strip_control_markers(text: Any) -> str:
 #: 每条已读发言在注入时截断多少字——够项目经理认出「这句他说过了」就行，
 #: 不是让他重读一遍。
 SEEN_SPEECH_CLIP = 400
-
-def _new_report_notice(listed: str) -> str:
-    """新报告通知块（发给项目经理 prompt，msg 化）。"""
-    return msg("engine.302", listed=listed)
 
 _SOULS = Path(__file__).parent / "souls"
 
@@ -1761,8 +1672,6 @@ class ProjectEngine:
         #: 不能等事件发生后再查花名册：那时 status 已经被 upsert 成 active，
         #: 「恢复」和「新建」已经不可区分。这里保存的是这段极短时序缝里的事实。
         self._pending_member_activity: dict[str, str] = {}
-        #: 已经跟项目经理说过的报告文件（开机时用磁盘上现有的报告播种 —— 见 _new_reports）
-        self._reports_told: set[str] | None = None
 
         self.coordinator_soul = _read_soul("coordinator")
 
@@ -2118,18 +2027,6 @@ class ProjectEngine:
             self._fired.add(self._completion_recovery_task)
             self._completion_recovery_task.add_done_callback(self._fired.discard)
 
-        # [v0.9a B-2 ②] ★ 开机这一刻，把磁盘上**已经存在**的报告全部记作「说过了」。
-        #
-        #   这一步必须在引擎起来的时候做，不能等「第一次要发通知」时才懒惰地做——
-        #   那样会有一个致命的时序缝：Worker 在项目经理的第一个回合之前就交了报告
-        #   （链式调度、崩溃恢复都可能），那份**真正的新报告**会被当成陈年旧账吞掉，
-        #   项目经理永远收不到通知。（这个洞是自测跑出来的，不是想出来的。）
-        #
-        #   反过来，不播种的话，每次重启项目经理都会被一堆老报告砸一遍——
-        #   跟 v0.8e #3 那条「每开机补一条『已加入项目』」是同一种病。
-        if self.agent is None and self._reports_told is None:
-            self._seed_reports_told()
-
         # [v0.19] 老项目第一次升级时，把已有 handoff 异步补进图谱。任务排队后立即返回，
         # 不延长引擎启动；后续新来源会接在 bootstrap 尾部，天然保持顺序。
         if self.project_id != "__platform__":
@@ -2160,18 +2057,6 @@ class ProjectEngine:
                 )
             # [v0.42] T2 兜底定时器（nightly 语义）。approved 满 N 的主触发在 commit_handoff_step。
             self._start_consolidate_timer()
-
-    def _seed_reports_told(self) -> None:
-        """把此刻磁盘上的报告全部记作「已通知」。失败也不许把引擎带走。"""
-        try:
-            self._reports_told = {self.handoff_ref(p) for p in self.handoff_reports()}
-            if self._reports_told:
-                log.info("[%s] 交接账本：%d 份历史报告（不再重复通知项目经理）",
-                         self.project_id, len(self._reports_told))
-        except Exception:
-            log.exception("[%s] 扫描历史报告失败 —— 这一轮按「没有历史报告」跑",
-                          self.project_id)
-            self._reports_told = set()
 
     async def _cancel_and_join(self, tasks: Iterable[asyncio.Task[Any]]) -> None:
         pending = [task for task in dict.fromkeys(tasks) if task is not asyncio.current_task()]
@@ -2843,20 +2728,35 @@ class ProjectEngine:
             except Exception:  # noqa: BLE001 - visible truth already committed by Hub
                 log.exception("[%s] Seen Speech 落盘失败：%s", self.project_id, view.completion_id)
 
-        # CompletionView owns the review trigger independently from Seen Speech. Turning
-        # the ledger off is a rollback of prompt injection, not a request to drop reviews.
-        review = {
-            "kind": "completion_review",
-            "completion_id": view.completion_id,
-            "report_ref": str((view.delivery or {}).get("report_ref") or ""),
-            "decision_required": ["accept", "rework"],
-        }
-        await self.notify_coordinator(
-            msg("engine.120"),
-            priority="background",
-            notification_id=f"completion-review:{view.completion_id}:v{view.version}",
-            structured_notification=review,
-        )
+        # [v1.0.37.2 R1/R6] 取消 PM 审阅：删除 review 结构化通知（PM 不再被要求
+        # 读报告/给 accept/rework 结论）。
+        # [v1.0.37.2 修正] 成功场景**彻底不通知 PM**（R5 已删）：
+        # 实测教训——任何 notify_coordinator 都会唤醒 PM 自动回合，LLM 被灌入
+        # 消息就必定回复、必定消耗 token；且无内容的一行提示让 PM 凭记忆瞎猜
+        # （实测 PM 说出「Arbor 还没交付」这种与事实相反的话）。
+        # worker 结果直接展示给用户，PM 全程旁观。
+        # 失败/停止（R6）保留——保命机制，带原因：
+        #   FAILED/SYSTEM_ERROR/TIMED_OUT → 带原因的失败通知（v0.29 语义保留）
+        #   CANCELLED → 带原因的停止通知（用户主动停止必须注明，避免 PM 反问用户）
+        # 其余状态（WAITING/BLOCKED 等）不通知，避免噪音。
+        status = getattr(event, "status", None)
+        status = status if isinstance(status, CompletionStatus) else None
+        worker_name = self.member_name(str(getattr(event, "worker_id", "") or "")) or msg("engine.106")
+        reason = str(getattr(event, "terminal_reason", "") or "").strip()
+        if status in {CompletionStatus.FAILED, CompletionStatus.SYSTEM_ERROR, CompletionStatus.TIMED_OUT}:
+            await self.notify_coordinator(
+                msg("engine.status.failed_notice", name=worker_name,
+                    reason=reason or msg("engine.status.unknown_reason")),
+                priority="background",
+                notification_id=f"completion-status:{view.completion_id}:v{view.version}",
+            )
+        elif status is CompletionStatus.CANCELLED:
+            await self.notify_coordinator(
+                msg("engine.status.cancelled_notice", name=worker_name,
+                    reason=reason or msg("engine.status.unknown_reason")),
+                priority="background",
+                notification_id=f"completion-status:{view.completion_id}:v{view.version}",
+            )
         return is_new_projection
 
     async def _emit_legacy_completion_visible(self, event: Any) -> bool:
@@ -3302,210 +3202,6 @@ class ProjectEngine:
             await self.inbox.put(item)
             queued += 1
         return queued
-
-    async def resume_waiting_task(
-        self,
-        wait_token_id: str,
-        answer: str,
-        *,
-        actor: str = "user",
-    ) -> dict[str, Any]:
-        """Resume the same TaskEnvelope lineage with a durable user answer."""
-        store = self.completion_store
-        token = store.get_wait_token(wait_token_id)
-        if token is None:
-            raise KeyError(wait_token_id)
-        if token.project_id != self.project_id:
-            raise ValueError("wait token belongs to another project")
-        event = store.get(token.completion_id)
-        if event is None:
-            raise RuntimeError("wait token has no CompletionEvent")
-        raw_envelope = event.metadata.get("task_envelope")
-        if not isinstance(raw_envelope, Mapping):
-            raise RuntimeError("WAITING completion has no TaskEnvelope snapshot")
-        envelope = TaskEnvelope.from_dict(raw_envelope)
-        if (
-            envelope.task_id != token.task_id
-            or envelope.attempt_id != token.attempt_id
-            or envelope.worker_id != token.worker_id
-        ):
-            raise RuntimeError("WAITING resume would change task/attempt/worker lineage")
-        if self._worker_has_authoritative_activity(token.worker_id):
-            raise RuntimeError(
-                f"worker {token.worker_id} is not available; resume after it returns to IDLE"
-            )
-
-        answer_path = self.internal_workspace / "runtime" / "wait-answers" / f"{wait_token_id}.json"
-        answer_payload = {
-            "schema_version": "knowe.harness.wait-answer.v1",
-            "wait_token_id": wait_token_id,
-            "task_id": token.task_id,
-            "attempt_id": token.attempt_id,
-            "worker_id": token.worker_id,
-            "actor": actor,
-            "answer": str(answer).strip(),
-            "answered_at": utc_now(),
-            "provenance": token.provenance,
-        }
-        self._atomic_completion_json(answer_path, answer_payload)
-        resumed = store.resume_wait(
-            wait_token_id,
-            answer=str(answer),
-            answer_ref=str(answer_path),
-            actor=actor,
-        )
-        envelope = replace(
-            envelope,
-            started_at=utc_now(),
-            metadata={
-                **envelope.metadata,
-                "resume_wait_token_id": wait_token_id,
-                "wait_answer": resumed.answer,
-                "wait_answer_ref": resumed.answer_ref,
-                "resumed_from_completion_id": event.completion_id,
-            },
-        )
-        self._task_envelopes[token.worker_id] = envelope
-        self._workers_with_open_activity.add(token.worker_id)
-        await self._run_worker(envelope, token.worker_id, internal=True)
-        active = store.active_for(token.task_id, token.attempt_id)
-        return {
-            "wait_token": (store.get_wait_token(wait_token_id) or resumed).to_dict(),
-            "completion": active.to_dict() if active else None,
-            "same_lineage": bool(
-                active
-                and active.task_id == token.task_id
-                and active.attempt_id == token.attempt_id
-            ),
-        }
-
-    def _compile_retry_attempt(
-        self,
-        prior: Any,
-        *,
-        decision_id: str,
-        reason: str,
-        dispatch: bool,
-    ) -> dict[str, Any]:
-        """Create a fresh attempt while preserving task scope and explicit safety inputs."""
-        raw_envelope = prior.metadata.get("task_envelope")
-        if not isinstance(raw_envelope, Mapping):
-            raise RuntimeError("CompletionEvent has no TaskEnvelope snapshot for retry")
-        envelope = TaskEnvelope.from_dict(raw_envelope)
-        ordinal = int(envelope.metadata.get("attempt_ordinal") or 1) + 1
-        attempt_id = "attempt_" + hashlib.sha256(
-            f"{prior.completion_id}:{decision_id}:{ordinal}".encode("utf-8")
-        ).hexdigest()[:20]
-        mutation_seen = any(
-            bool(row.get("mutation_ids"))
-            or str(row.get("disposition") or "")
-            in {"created_in_attempt", "modified_in_attempt", "unauthorized_mutation", "deleted_in_attempt"}
-            for row in prior.artifact_manifest
-        )
-        transient_keys = {
-            "resume_wait_token_id", "wait_answer", "wait_answer_ref", "completion_id",
-            "required_context_ready", "context_bundle_ref", "context_receipt_ref",
-        }
-        clean_metadata = {
-            key: value
-            for key, value in envelope.metadata.items()
-            if key not in transient_keys
-        }
-        envelope_ref = f"runtime/task-envelopes/{envelope.task_id}/{attempt_id}.json"
-        retry_envelope = replace(
-            envelope,
-            attempt_id=attempt_id,
-            delivery=replace(envelope.delivery, attempt_id=attempt_id),
-            created_at=utc_now(),
-            started_at=utc_now(),
-            metadata={
-                **clean_metadata,
-                "attempt_ordinal": ordinal,
-                "retry_of_attempt_id": prior.attempt_id,
-                "retry_of_completion_id": prior.completion_id,
-                "retry_decision_id": decision_id,
-                "retry_reason": reason,
-                "mutation_seen": mutation_seen,
-                "mutation_warning": (
-                     "Prior attempt produced verified side effects; inspect its delivered files before retry."
-                    if mutation_seen else ""
-                ),
-                "task_envelope_ref": envelope_ref,
-            },
-        )
-        retry_envelope, envelope_ref = self._task_envelope_store().commit(retry_envelope)
-        self.inject_task_envelope(retry_envelope)
-        worker_id = retry_envelope.worker_id
-        if dispatch:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                pass
-            else:
-                self._start_worker_turn(worker_id, retry_envelope)
-        return {
-            "task_id": retry_envelope.task_id,
-            "attempt_id": attempt_id,
-            "worker_id": worker_id,
-            "task_envelope_ref": envelope_ref,
-            "mutation_seen": mutation_seen,
-            "dispatched": bool(dispatch),
-        }
-
-    async def decide_completion(
-        self,
-        completion_id: str,
-        action: CoordinatorAction | str,
-        *,
-        actor: str = "coordinator",
-        reason: str = "",
-        payload: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Uniform Coordinator decision API for all non-success Completion statuses."""
-        data = dict(payload or {})
-        prior = self.completion_store.get(completion_id)
-        if prior is None:
-            raise KeyError(completion_id)
-        next_event, decision = CompletionCommitter(self.completion_store).decide(
-            completion_id,
-            action,
-            actor=actor,
-            reason=reason,
-            payload=data,
-        )
-        action_value = action if isinstance(action, CoordinatorAction) else CoordinatorAction(str(action))
-        result: dict[str, Any] = {
-            "decision": decision.to_dict(),
-            "completion": next_event.to_dict() if next_event else prior.to_dict(),
-        }
-        if next_event is not None:
-            await self.reconcile_completion_outbox(next_event.completion_id)
-        if action_value is CoordinatorAction.PROVIDE_DEPENDENCY:
-            answer = str(data.get("answer") or reason).strip()
-            if prior.status is CompletionStatus.WAITING:
-                token = self.completion_store.active_wait_for_completion(prior.completion_id)
-                if token is None:
-                    raise RuntimeError("WAITING completion has no active wait token")
-                result["resume"] = await self.resume_waiting_task(
-                    token.wait_token_id,
-                    answer,
-                    actor=actor,
-                )
-            else:
-                result["retry"] = self._compile_retry_attempt(
-                    prior,
-                    decision_id=decision.decision_id,
-                    reason=reason or "dependency_provided",
-                    dispatch=bool(data.get("dispatch", True)),
-                )
-        elif action_value in {CoordinatorAction.RETRY, CoordinatorAction.REJECT}:
-            result["retry"] = self._compile_retry_attempt(
-                    prior,
-                    decision_id=decision.decision_id,
-                    reason=reason or action_value.value,
-                    dispatch=bool(data.get("dispatch", True)),
-                )
-        return result
 
     async def _submit_internal(
         self,
@@ -5166,36 +4862,9 @@ class ProjectEngine:
             memory_clues = await self._memory_clues_block(content, retrieval_context={})
 
         agent = self._get_or_create_coordinator()
-        structured_notification = notification_from_unknown(_STRUCTURED_NOTIFICATION_VAR.get())
-        seen_rows: list[VisibleSpeech] = []
-        seen_block = ""
-        review_block = ""
-        if structured_notification:
-            completion_id = str(structured_notification.get("completion_id") or "")
-            if feature_enabled(FeatureFlag.SEEN_SPEECH_V1):
-                seen_rows = self.seen_speech_ledger.by_completion(completion_id, limit=3)
-                seen_block = render_seen_speech_block(
-                    seen_rows, total_count=self.seen_speech_ledger.count(),
-                )
-            choices_raw = structured_notification.get("decision_required") or ()
-            choices = msg("engine.196.sep").join(choices_raw) if choices_raw else msg("engine.196.fb")
-            # [v1.0.24.2] 账本字段不进 LLM 上下文（审计 PRD v1.0.24.2）：
-            #   · completion_id —— 引擎幂等/记账/审计专用（notification_id + ledger），
-            #     没有任何工具参数消费它，注入只会诱导 LLM 复述 cmp_ 编号 → 不注入
-            #   · report_ref —— 读报告需要路径，语义化为「报告文件：…」（engine.199），
-            #     不输出裸 `report_ref: -` 占位
-            # 空值行一律省略（不输出 `-`），杜绝「本次 completion（cmp_xxx）」类复述。
-            review_block = msg("engine.195")
-            report_ref = str(structured_notification.get("report_ref") or "").strip()
-            if report_ref:
-                review_block += msg("engine.review.report_path", path=report_ref) + "\n"
-            review_block += (
-                msg("engine.196", choices=choices)
-                + msg("engine.197")
-                + msg("engine.198")
-            )
-        # Structured Completion notifications supersede the legacy report notice.
-        notice = "" if structured_notification else self._report_notice()
+        # [v1.0.37.2 R1] 取消 PM 审阅：删除 review_block / seen_block（成员发言内容
+        # 注入）/ legacy 报告通知。PM 对成员进展的感知改由 R5/R6 轻量通知承担——
+        # 通知经 inbox 作为消息到达（notify_coordinator 纯文本），无需在此拼块。
         dm_context = ""
         if dm_framing == "coordinator":
             who = self.member_name(COORDINATOR) or msg("engine.007")
@@ -5219,9 +4888,6 @@ class ProjectEngine:
             + memory_clues
             + self._knowledge_ctx_block()
             + self._skill_ctx_block()
-            + (("\n\n" + review_block) if review_block else "")
-            + (("\n\n" + seen_block) if seen_block else "")
-            + (("\n\n" + notice) if notice else "")
             + (("\n\n" + dm_context) if dm_context else "")
             + (("\n\n" + user_address_block) if user_address_block else "")
             + "\n\n" + _engine_block("ACTION_CONTRACT")
@@ -7562,52 +7228,28 @@ class ProjectEngine:
         return self.internal_workspace / "agents"
 
     def _write_agent_profile(self, agent_id: str) -> None:
-        """给一个成员建/刷新 Profile 目录。幂等：IDENTITY.md 每次按最新身份覆盖，
-        SOUL.md/占位目录只在缺失时建。异常吞掉。"""
+        """给一个成员建 Profile 目录（memory/skills，供 worklog 等使用）。异常吞掉。"""
         if agent_id == COORDINATOR:
             return
         try:
-            idy = self.identity(agent_id)
             base = self.agents_dir() / _safe(agent_id)
             (base / "memory").mkdir(parents=True, exist_ok=True)
             (base / "skills").mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            identity_md = (
-                f"---\nid: {idy['id']}\nname: {idy['name']}\nrole: {idy['role']}\n"
-                + f"updated: {ts}\n---\n\n"
-                + msg("engine.identity.md_title", name=idy['name'], role=idy['role'])
-                + msg("engine.identity.summary_name_role", name=idy['name'], role=idy['role'])
-                + msg("engine.identity.summary_id", id=idy['id'])
-                + msg("engine.identity.summary_same", name=idy['name'])
-                + msg("engine.249")
-                + msg("engine.250")
-            )
-            _atomic_text(base / "IDENTITY.md", identity_md)
-
-            soul_path = base / "SOUL.md"
-            if not soul_path.exists():
-                _atomic_text(soul_path, (
-                    msg("engine.identity.profile_title", name=idy['name'])
-                    + msg("engine.identity.profile_role", role=idy['role'])
-                    + msg("engine.251")
-                ))
         except Exception:
             log.warning("[%s] 写 Agent Profile 失败：%s", self.project_id, agent_id)
 
     def ensure_agent_profile(self, agent_id: str) -> None:
         """
-        [v0.13 模块B] 确保这个成员的 `internal_workspace/agents/{id}/` 存在——不在就重建。
+        [v0.13 模块B] 确保这个成员的 `internal_workspace/agents/{id}/memory` 与 `skills` 存在——不在就重建。
 
-        内部目录迁移 / 意外丢失后自愈：`_write_agent_profile` 是幂等且安全的
-        （IDENTITY.md 按最新身份覆盖，SOUL.md / memory/ / skills/ 只在缺失时建，绝不覆盖用户改动），
+        内部目录迁移 / 意外丢失后自愈：`_write_agent_profile` 是幂等且安全的（只在缺失时建目录），
         所以「缺了才补」这件事随便调，代价只是一次 `exists()`。
         """
         if agent_id == COORDINATOR:
             return
         try:
             base = self.agents_dir() / _safe(agent_id)
-            if base.exists() and (base / "IDENTITY.md").exists():
+            if (base / "memory").exists() and (base / "skills").exists():
                 return                       # 已在 → 跳过，省一趟 IO
         except Exception:
             pass                             # 探测都失败，那就往下走，让重建再兜一次
@@ -8678,11 +8320,6 @@ class ProjectEngine:
     def _task_envelope_store(self) -> TaskEnvelopeStore:
         return TaskEnvelopeStore(self.internal_workspace)
 
-    def _task_actor_refs(self, target_id: str) -> tuple[str, str]:
-        self.ensure_agent_profile(target_id)
-        safe_id = _safe(target_id)
-        return (f"agents/{safe_id}/IDENTITY.md", f"agents/{safe_id}/SOUL.md")
-
     @staticmethod
     def _runtime_report_lineage(content: str) -> tuple[bool, str]:
         """Recognize reports that carry immutable Runtime delivery lineage."""
@@ -8757,7 +8394,6 @@ class ProjectEngine:
         objective_text = str(objective)
         if not objective_text.strip():
             raise ValueError(msg("engine.280"))
-        identity_ref, soul_ref = self._task_actor_refs(target_id)
         accepted_refs, observed_refs, accepted_delivery_ids = self._resolve_report_refs(report_refs)
         identity = self.identity(target_id)
         coordinator_turn_id = f"coordinator-turn-{int(getattr(self, '_turn_count', 0))}"
@@ -8805,8 +8441,6 @@ class ProjectEngine:
             "instruction_delivery": "verbatim",
             "review_owner": "coordinator",
             "user_address": self._user_address_line(),
-            "identity_ref": identity_ref,
-            "soul_ref": soul_ref,
             **({
                 "identity_contract_v1": {
                     "platform_name": identity_for(
@@ -9363,37 +8997,6 @@ class ProjectEngine:
             step=self.handoff.next_step(),
             next_no=int(d.name.split("-", 1)[0]) + 1,
         )
-
-    def _new_reports(self) -> list[Path]:
-        """
-        [B-2 ②] 磁盘上有没有**还没跟项目经理说过**的报告。
-
-        ★ 第一次调用时，把当时已经存在的报告全部记作「说过了」。
-          否则每次重启，项目经理都会被一堆陈年老报告砸一遍——
-          这正是 v0.8e #3 那条「每开机补一条『已加入项目』」的同一种错：
-          把「有没有通知过」的判据挂在一个每次都会重来的东西上。
-        """
-        found = self.handoff_reports()
-        if self._reports_told is None:
-            self._reports_told = {self.handoff_ref(p) for p in found}   # 开机播种：历史报告不再重播
-            return []
-        fresh = [p for p in found if self.handoff_ref(p) not in self._reports_told]
-        self._reports_told.update(self.handoff_ref(p) for p in fresh)
-        return fresh
-
-    def _report_notice(self) -> str:
-        """有新报告 → 一段贴到项目经理 prompt 上的通知；没有 → 空串。"""
-        fresh = self._new_reports()
-        if not fresh:
-            return ""
-        # [v0.12 D · 问题一] 通知里用**名字**称呼交报告的人（文件名里是 id，但名单/对话都用名字）。
-        #   这样项目经理读到「林知远交了报告」，跟【当前团队】名单对得上，不会看着 fe_1 犯迷糊，
-        #   也不会顺手把 id 报给用户。read_report 仍然用后面那个文件名。
-        listed = "\n".join(
-             msg("engine.292")
-            for p in fresh)
-        log.info("[%s] 新报告 %d 份 → 贴进项目经理的 prompt", self.project_id, len(fresh))
-        return _new_report_notice(listed)
 
     def absorb_markers(self, text: str) -> str:
         """Consume only complete framework marker responses/lines; preserve all prose."""
@@ -9971,4 +9574,4 @@ def _atomic_text(path: Path, text: str) -> None:
 
 
 __all__ = ["ProjectEngine", "build_agent", "harness_mode",
-           "COORDINATOR", "COORDINATOR_ROLE", "REPORT_NOTICE", "WorkspaceUnavailable"]
+           "COORDINATOR", "COORDINATOR_ROLE", "WorkspaceUnavailable"]

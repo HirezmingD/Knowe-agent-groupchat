@@ -900,91 +900,6 @@ def _register_knowledge_readonly(
     )
 
 
-def _register_readonly(reg: ToolRegistry, engine: "ProjectEngine",
-                       role: str = "coordinator") -> None:
-    """
-    两边都注册的只读工具（list_handoff_dir / read_report）。
-
-    [v0.11 C-2] ★ 但 handoffs 目录是**项目经理专属**：里面有项目经理发给各 Worker 的派活指令，
-      也有各 Worker 交回的报告。按权限矩阵，**Worker 不能读 handoffs**。
-      所以这俩工具对 Worker 一律报错——注册进去只是为了给一句清楚的「你没这个权限」，
-      而不是让它吃「没有名为 X 的工具」那种让人一头雾水的错。
-    """
-    is_worker = (role == "worker")
-    _DENY = msg("tools_knowe.py.070")
-
-    async def handle_list_handoff(args: dict[str, Any], **kw: Any) -> str:
-        del args, kw
-        if is_worker:
-            return _err(_DENY)
-        files = sorted(engine.handoff_ref(path) for path in engine.handoff_files())
-        if not files:
-            return _ok(files=[], message=msg("tools_knowe.py.071"))
-        return _ok(
-            files=files,
-            count=len(files),
-            current_dir=engine.handoff_ref(engine.phase_dir()) + "/",
-        )
-
-    _register(
-        reg,
-        name="list_handoff_dir",
-        description=(
-            msg("tools_knowe.py.072") +
-            msg("tools_knowe.py.073")
-        ),
-        parameters={"type": "object", "properties": {}},
-        handler=handle_list_handoff,
-    )
-
-    async def handle_read_report(args: dict[str, Any], **kw: Any) -> str:
-        del kw
-        if is_worker:
-            return _err(_DENY)
-        h = args.get("report_hash")
-        if not isinstance(h, str) or not h:
-            return _err(msg("tools_knowe.py.074"))
-
-        # [v0.9a B-1] ★ 三种写法都认：
-        #     文件名 report-03-fe_1-用户认证.md
-        #     相对路径 handoffs/03-后端/report-03-fe_1-用户认证.md
-        #     老的报告号 a1b2c3…（新报告的 frontmatter 里带着它）
-        #   模型引用错一个名字是常态，为此让它吃一个「没有这份报告」再重试一轮，
-        #   是在浪费用户的钱和时间。
-        path = engine.find_handoff_file(h)
-
-        if path is None or not path.is_file():
-            known = [engine.handoff_ref(p) for p in engine.handoff_reports()][-5:]
-            return _err(msg("tools_knowe.py.075", h=h),
-                        available=known or [msg("tools_knowe.py.076")])
-
-        return _ok(
-            report_hash=h,
-            file=engine.handoff_ref(path),
-            content=path.read_text("utf-8", errors="replace"),
-        )
-
-    _register(
-        reg,
-        name="read_report",
-        description=(
-            msg("tools_knowe.py.077") +
-            msg("tools_knowe.py.078")
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "report_hash": {
-                    "type": "string",
-                    "description": msg("tools_knowe.py.079"),
-                },
-            },
-            "required": ["report_hash"],
-        },
-        handler=handle_read_report,
-    )
-
-
 # ═══════════════════════════════════════════════════════════════
 # 校验
 # ═══════════════════════════════════════════════════════════════
@@ -1742,7 +1657,6 @@ def build_coordinator_registry(engine: "ProjectEngine") -> ToolRegistry:
 
     _register_project_memory_readonly(reg, engine, role="coordinator")
     _register_knowledge_readonly(reg, engine, role="coordinator")
-    _register_readonly(reg, engine, role="coordinator")
     _register_coordinator_eyes(reg, engine)          # [v0.29 问题三] 他自己有眼睛
     _register_external_readonly(reg, engine, role="coordinator")
     return reg

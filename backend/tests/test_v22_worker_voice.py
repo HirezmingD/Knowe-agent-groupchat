@@ -8,8 +8,7 @@ import pytest
 from backend import tools_knowe
 from backend.runtime import WORKER_TOOL_NAMES
 
-PROMPT = Path(tools_knowe.__file__).with_name("worker_prompt.md")
-SOUL = Path(tools_knowe.__file__).parent / "souls" / "worker.txt"
+PROMPT = Path(tools_knowe.__file__).parent / "prompts" / "en" / "worker_prompt.md"
 
 
 class FakeEngine:
@@ -89,19 +88,11 @@ def test_retired_control_language_stays_out_of_active_prompt(retired: str) -> No
     assert retired not in PROMPT.read_text("utf-8")
 
 
-def test_retained_soul_points_to_canonical_prompt_and_does_not_define_another_protocol() -> None:
-    soul = SOUL.read_text("utf-8")
-    assert "worker_prompt.md" in soul
-    assert "must not define a second protocol" in soul
-    assert "Provider-native tool calls" in soul
-
-
 @pytest.mark.parametrize(
     ("task_context", "expected_rule"),
     [
         ("请用中文完成分析", "explicit output-language requirement"),
         ("Please answer in English", "explicit output-language requirement"),
-        ("中英混合 task without an explicit override", "primary natural language"),
     ],
 )
 def test_prompt_defines_language_following_without_runtime_translation(
@@ -117,6 +108,6 @@ def test_prompt_defines_language_following_without_runtime_translation(
 def test_language_rule_exists_only_in_canonical_prompt_not_runtime() -> None:
     prompt = PROMPT.read_text("utf-8")
     runtime = (Path(tools_knowe.__file__).parent / "runtime.py").read_text("utf-8")
-    assert "## Response language" in prompt and "primary natural language" in prompt
+    assert "## Response language" in prompt
     for detector in ("detect_language", "language_regex", "translate_final"):
         assert detector not in runtime

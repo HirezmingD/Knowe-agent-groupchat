@@ -1,23 +1,26 @@
 /**
  * Composer.tsx — 输入区（component-tree §D · Composer）
  *
+ * [v1.0.37.3] 输入内核 textarea → TipTap 富文本：
+ *   · @成员 显示为 tag（mention 节点，退格整体删）
+ *   · markdown 快捷输入（# 标题 / ** 加粗 / * 斜体 / - 列表 / 1. 列表 / ``` 代码块）
+ *   · 右键原生编辑菜单（Electron IPC）
+ *
  * DOM：.composer-wrap > #quoteHolder + .attach-strip
- *                     + (.composer(.focus) > (.tools > button.icon-btn ×N) + textarea + button.send(.idle))
+ *                     + (.composer(.focus) > (.tools > button.icon-btn ×N)
+ *                         + .tiptap-wrap(EditorContent) + button.send(.idle))
  *
  * 铁律（v0.3 计划 §阶段5，血的教训）：
  *   1. ★ 永不因 conn 从 DOM 卸载 —— 断线时输入框必须还在，字不能丢。
- *      （v0.2 的「输入框消失」事故就是把 Composer 挂在连接状态下渲染的。）
  *   2. 发送 → store.sendMessage：socket 出站 + 乐观 pending 气泡（store 内一并完成）。
- *      回声 5s 未到 → transport 的哨兵 → suspectEcho → 气泡变「发送存疑 ⚠」。
- *   3. 未连接也允许发送：transport 会响亮失败并进哨兵，屏幕上看得见——
- *      比「按钮变灰、用户不知道为什么」诚实。
+ *   3. 未连接也允许发送：transport 会响亮失败并进哨兵，屏幕上看得见。
  *   4. ★ [v0.7 #1] 输入框里的字**属于会话，不属于输入框**——它存在 conv.draft 里。
- *      切走保留、切回来还在；发出去才清。Composer 自己不留任何一份文字的副本。
- *   5. [v0.8b #9] **Ctrl/⌘+Enter 发送，Enter 换行。** 给 Agent 的指令是要分条写、
- *      要贴代码、要改两遍的——Enter 直接发，等于每敲一次回车就推出去半句话。
+ *      [v1.0.37.3] draft 仍是纯文本 string（markdown）：编辑器是富文本真源，
+ *      onUpdate 时序列化写回 draft；切会话时 markdown 反序列化恢复（见 tiptapMarkdown.ts）。
+ *   5. [v0.8b #9] **Ctrl/⌘+Enter 发送，Enter 换行。**
  *
- * textarea 自增高：用 ref 直接改 element.style.height（imperative），
- * 不是 JSX 的 style={{}}——铁律 1 禁的是后者。
+ * TipTap 集成注意（stale closure 铁律）：editorProps.handleKeyDown / onUpdate 捕获的是
+ * 创建时的闭包——所有需要最新状态的操作一律经 ref 转发（*Ref.current），绝不直接闭包调用。
  */
 
 import React, {
@@ -38,22 +41,29 @@ import { IconForKind } from '../preview/icons';
 import { kindOf } from '../preview/fileKinds';
 import { PLATFORM_PROJECT_ID } from '../store/avatar';
 import type { Member } from '../store/state';
+import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import { Extension } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
+import Placeholder from '@tiptap/extension-placeholder';
+import Mention from '@tiptap/extension-mention';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import {
+  tiptapDocToMarkdown, markdownToTiptapDoc, type MentionMatcher,
+} from '../shared/tiptapMarkdown';
 
 /** 输入区最小高度（设计稿的原状） */
 export const COMPOSER_MIN = 96;
 
-/** 没展开时，textarea 自增高的天花板 */
+/** 没展开时，输入区自增高的天花板 */
 const MAX_TA_HEIGHT = 132;
 
 /**
  * [v0.8b #5] 展开时，输入区顶到**离 chat-head 还有这么远**的地方。
- *
- * 留这条缝有两个用处：一是消息流不至于被压成 0 高（还看得见最后一条），
- * 二是「不覆盖、不重叠」——它是顶在头下面，不是压在头上面。
  */
 const EXPAND_GAP = 24;
 
-/** @候选浮层的碰边参数。浮层默认在触发按钮上方，空间不够时自动翻到下方。 */
+/** @候选浮层的碰边参数。浮层默认在触发上方，空间不够时自动翻到下方。 */
 const MENTION_PICKER_GAP = 8;
 const MENTION_PICKER_MAX_HEIGHT = 280;
 const MENTION_PICKER_VIEWPORT_MARGIN = 12;
@@ -66,32 +76,67 @@ interface MentionPickerPosition {
   ready: boolean;
 }
 
-interface MentionFragment {
-  start: number;
-  end: number;
-  query: string;
-}
-
-/** 光标前是否正处在一个尚未完成的 @查询中（邮箱 local-part 不算）。 */
-function mentionFragmentAt(value: string, cursor: number): MentionFragment | null {
-  const before = value.slice(0, Math.max(0, cursor));
-  const start = before.lastIndexOf('@');
-  if (start < 0) return null;
-  const prev = start > 0 ? before[start - 1] : '';
-  if (/[A-Za-z0-9._%+-]/.test(prev)) return null; // foo@bar.com
-
-  const query = before.slice(start + 1);
-  // 打了空格/换行/标点，说明提及已经结束；显示名带空格仍可通过按钮列表插入。
-  if (/[\s，。！？、,;；:：()（）\[\]{}]/.test(query) || query.length > 32) return null;
-  return { start, end: cursor, query };
-}
-
 function mentionLabel(member: Member): string {
   // [v1.0.21.1.3] 一律显示成员显示名（项目经理就叫「项目经理」）。历史曾把 coordinator
   // 特判显示为「主管」——用户从未有此诉求，是遗留错误，已移除。
   // 后端 mentions 解析仍兼容「主管」等历史别名，手打 @主管 依然有效。
-  return member.display.name.replace(/^@+/, '').trim();
+  return (member.display.name ?? '').replace(/^@+/, '').trim();
 }
+
+/**
+ * [v1.0.37.3] 由「光标前文本」判断是否正处在一个尚未完成的 @查询中（邮箱 local-part 不算）。
+ * 原 mentionFragmentAt 的文本版——textarea 时代基于 value+selectionStart，
+ * 现在基于 TipTap 文档光标前的纯文本。
+ */
+function mentionQueryAt(before: string): { start: number; query: string } | null {
+  const at = before.lastIndexOf('@');
+  if (at < 0) return null;
+  const prev = at > 0 ? (before[at - 1] ?? '') : '';
+  if (/[A-Za-z0-9._%+-]/.test(prev)) return null; // foo@bar.com
+
+  const query = before.slice(at + 1);
+  // 打了空格/换行/标点，说明提及已经结束；显示名带空格仍可通过按钮列表插入。
+  if (/[\s，。！？、,;；:：()（）\[\]{}]/.test(query) || query.length > 32) return null;
+  return { start: at, query };
+}
+
+/**
+ * [v1.0.37.3] 代码块行号：给 codeBlock 内每个非空行加 .code-line（data-line=真实行号），
+ * CSS ::before 渲染行号。空行跳过（不显示数字，但不错号）。
+ */
+const codeLineNumbers = Extension.create({
+  name: 'codeLineNumbers',
+  addProseMirrorPlugins() {
+    const linePlugin = new Plugin({
+      key: new PluginKey('codeLineNumbers'),
+      props: {
+        decorations(state) {
+          const decos: Decoration[] = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== 'codeBlock') return;
+            const lines = node.textContent.split('\n');
+            let offset = 0;
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i] ?? '';
+              if (line.length > 0) {
+                decos.push(
+                  Decoration.inline(
+                    pos + 1 + offset,
+                    pos + 1 + offset + line.length,
+                    { class: 'code-line', 'data-line': String(i + 1) },
+                  ),
+                );
+              }
+              offset += line.length + 1;
+            }
+          });
+          return DecorationSet.create(state.doc, decos);
+        },
+      },
+    });
+    return [linePlugin];
+  },
+});
 
 export const Composer: React.FC = () => {
   const { t } = useTranslation();
@@ -102,23 +147,14 @@ export const Composer: React.FC = () => {
 
   /*
    * [v0.7 #1] ★ 输入框里的字**不再是 Composer 自己的 state** —— 它归会话所有。
-   *
-   *   原来是 useState('')：一个输入框，一份文字，服务所有项目。
-   *   在 A 群打了一半的字，切到 B 群，字跟着过去了；一按回车，发到的是 B。
-   *   微信不是这样的——每个聊天各记各的草稿，切走了还在，切回来接着写。
-   *
-   *   所以文字进 store（conv.draft），Composer 只是它的一块玻璃：
-   *   activeProjectId 一变，读到的自然就是新会话的草稿，不用手动"保存/恢复"。
+   * [v1.0.37.3] draft 仍是纯文本（markdown）：编辑器是富文本真源，onUpdate 写回。
    */
   const selectDraft = useMemo(() => makeSelectDraft(projectId), [projectId]);
   const text = useKnoweStore(selectDraft);
   const setDraft = useKnoweStore((s) => s.setDraft);
   const clearDraft = useKnoweStore((s) => s.clearDraft);
 
-  /*
-   * [v1.0.19.4] 待发送附件也归会话（和草稿一个道理）：在 A 群挂了两个文件、切到 B 群，
-   *   文件跟着 A 群留着；切回来还在，发出去才清。Composer 只是它的一块玻璃。
-   */
+  /* [v1.0.19.4] 待发送附件也归会话（和草稿一个道理）。 */
   const selectAttachments = useMemo(() => makeSelectAttachments(projectId), [projectId]);
   const attachments = useKnoweStore(selectAttachments);
   const addAttachments = useKnoweStore((s) => s.addAttachments);
@@ -151,23 +187,17 @@ export const Composer: React.FC = () => {
     }
   }, [projectId, addAttachments, remindMultimodal]);
 
-  /*
-   * [v0.40.0] 引用条 + 多选禁用。
-   *   · quote：右键「引用」写进 store，这里画在输入框上方（#quoteHolder，
-   *     component-tree §D：.quote-bar > (.qb-body > .qb-nm + .qb-tx) + .qb-x）。
-   *   · selecting：多选模式下整个输入区半透明、不可点（README §3.4；
-   *     照抄 reference enterSelect 对 #composerWrap 的处理：opacity .4 + pointer-events none）。
-   */
+  /* [v0.40.0] 引用条 + 多选禁用。 */
   const quote = useKnoweStore((s) => s.quote);
   const clearQuote = useKnoweStore((s) => s.clearQuote);
   const selecting = useKnoweStore((s) => s.selecting);
 
   const [focus, setFocus] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const composerBoxRef = useRef<HTMLDivElement>(null);
   const mentionButtonRef = useRef<HTMLButtonElement>(null);
   const mentionPickerRef = useRef<HTMLDivElement>(null);
+  const editorElRef = useRef<HTMLDivElement>(null);
 
   // [v0.44.5] @成员只属于项目群：私聊频道和知知平台会话不展示这套入口。
   const canMention = Boolean(
@@ -200,27 +230,235 @@ export const Composer: React.FC = () => {
     ));
   }, [mentionMembers, mentionQuery]);
 
+  /** [v1.0.37.3] 草稿恢复/发送用：成员显示名 → mention 匹配表。 */
+  const mentionMatchers = useMemo<MentionMatcher[]>(
+    () => mentionMembers.map((m) => ({ id: m.id, label: mentionLabel(m) })),
+    [mentionMembers],
+  );
+
+  /** [v1.0.37.3] 编辑器是否有非空内容（发送键 idle 判断，避免吃 draft 影子的一帧滞后）。 */
+  const [hasText, setHasText] = useState(false);
+
+  /*
+   * [v1.0.37.3] 自增高：textarea scrollHeight → contentEditable scrollHeight。
+   * 空输入回落单行高（placeholder 长文本会把 scrollHeight 撑成两行）。
+   */
   const grow = useCallback(() => {
-    const ta = taRef.current;
-    if (!ta) return;
-    // 空输入：placeholder 长文本（英文）会把 scrollHeight 撑成两行 →
-    // 直接回落 rows=1 的固有单行高度，不读 scrollHeight。
-    if (!ta.value) {
-      ta.style.height = '';
+    const wrap = editorElRef.current;
+    const el = wrap?.querySelector<HTMLElement>('[contenteditable]') ?? wrap;
+    if (!el) return;
+    if (!el.innerText || el.innerText.trim() === '') {
+      el.style.height = '';
       return;
     }
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, MAX_TA_HEIGHT) + 'px';
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, MAX_TA_HEIGHT) + 'px';
   }, []);
 
-  // 换会话 → 输入框里换成另一段草稿 → 高度得跟着那段字重算（不然会留着上一条的高度）
-  useEffect(() => { grow(); }, [projectId, grow]);
+  /* ═══════════ TipTap 编辑器（创建一次，全部经 ref 转发防 stale closure） ═══════════ */
 
-  // [v0.40.0] 右键「引用」→ 光标进输入框（照抄 reference setQuote 末尾的 ta.focus()）
-  useEffect(() => { if (quote) taRef.current?.focus(); }, [quote]);
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const mentionOpenRef = useRef(mentionOpen);
+  mentionOpenRef.current = mentionOpen;
+  const mentionIndexRef = useRef(mentionIndex);
+  mentionIndexRef.current = mentionIndex;
+  const filteredMentionMembersRef = useRef(filteredMentionMembers);
+  filteredMentionMembersRef.current = filteredMentionMembers;
 
-  // [v1.0.24.7-P0-3] 引用条跨会话错发·组件层双保险：store.switchProject 已治本（切群清
-  //   quote），这里兜底「任何不经 switchProject 的会话变化」（如会话被归档/重建）。
+  // 光标前 @ 查询 → 开关弹层（TipTap 文档文本版）。
+  const syncMentionFromCursor = useCallback((ed: Editor): void => {
+    if (!canMention) {
+      setMentionOpen(false);
+      return;
+    }
+    const { state } = ed.view;
+    const pos = state.selection.$from.pos;
+    const before = state.doc.textBetween(Math.max(0, pos - 40), pos);
+    const frag = mentionQueryAt(before);
+    if (!frag) {
+      setMentionOpen(false);
+      setMentionQuery('');
+      return;
+    }
+    setMentionQuery(frag.query);
+    setMentionIndex(0);
+    setMentionOpen(true);
+  }, [canMention]);
+  const syncMentionRef = useRef(syncMentionFromCursor);
+  syncMentionRef.current = syncMentionFromCursor;
+
+  const insertMention = useCallback((member: Member): void => {
+    const ed = editorRef.current;
+    if (!ed || !projectId) return;
+    const { state } = ed;
+    const { from } = state.selection;
+    // [v1.0.37.3 fix] 删除触发字符 @（及未完成的查询串 @小…），否则残留文本 @ 与
+    // 胶囊自带的 @ 叠加成 @@。用 mentionQueryAt 定位 @ 起点，整段删干净。
+    const before = state.doc.textBetween(Math.max(0, from - 40), from);
+    const frag = mentionQueryAt(before);
+    const deleteFrom = frag ? from - (before.length - frag.start) : from;
+    // [v1.0.37.3 fix] 胶囊两侧补真实空格：浏览器 caret 不认 margin（紧邻 inline-block
+    // 的插入点，caret 画在元素 border 处），只有真实空格才能让光标/文字离开胶囊。
+    // 右侧始终补空格；左侧仅当非行首且前字符不是空格时补（行首不顶格）。
+    const beforeChar = state.doc.textBetween(Math.max(0, deleteFrom - 1), deleteFrom);
+    const leftSpace = beforeChar && !/\s$/.test(beforeChar) ? ' ' : '';
+    // 动态构建：空文本节点会被 ProseMirror 拒绝（Empty text nodes are not allowed）
+    const content: Array<{ type: string; text?: string; attrs?: Record<string, string> }> = [];
+    if (leftSpace) content.push({ type: 'text', text: leftSpace });
+    content.push({
+      type: 'mention',
+      attrs: { id: member.id, label: mentionLabel(member) },
+    });
+    content.push({ type: 'text', text: ' ' });
+    ed.chain()
+      .focus()
+      .deleteRange({ from: deleteFrom, to: from })
+      .insertContent(content)
+      .run();
+    setMentionOpen(false);
+    setMentionQuery('');
+    setMentionIndex(0);
+  }, [projectId]);
+  const insertMentionRef = useRef(insertMention);
+  insertMentionRef.current = insertMention;
+
+  const doSend = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed || !projectId) return;
+    // [v1.0.37.3] 发送取编辑器真源（draft 是影子，可能滞后一帧）。
+    const t = tiptapDocToMarkdown(ed.getJSON()).trim();
+    // [v1.0.19.4] 只要有文字**或**有附件就能发；纯附件（无文字）也允许。
+    if ((!t && attachments.length === 0)) return;
+    setMentionOpen(false);
+    setMentionQuery('');
+    /*
+     * [v0.40.1] 引用发送（README §4）——两条路分开：
+     *   · 发给后端的正文 = 结构化引用（Agent 在后台看到明确的引用/发言分隔）
+     *   · 气泡上显示的 = 用户本轮正文 + 顶部一条 .qref 引用块
+     */
+    if (quote) {
+      const structured = i18n.t('composer.quoteStructure', { name: quote.name, text: quote.text, verb: i18n.t('composer.17'), t });
+      sendMessage(structured, projectId, undefined, {
+        displayText: t,
+        quote: {
+          name: quote.name,
+          text: quote.text.length > 80 ? `${quote.text.slice(0, 80)}…` : quote.text,
+          ref: quote.itemKey,
+        },
+        ...(attachments.length ? { attachments: attachments as never } : {}),
+      });
+      clearQuote();
+    } else {
+      // 出站 + 乐观气泡（store 一手包办）；[v1.0.19.4] 带上本会话的附件。
+      sendMessage(t, projectId, undefined,
+        attachments.length ? { attachments: attachments as never } : undefined);
+    }
+    ed.commands.clearContent();          // 触发 onUpdate → setDraft('') + hasText=false
+    clearDraft(projectId);               // [v0.7 #1] 发出去了，草稿就没了
+    if (attachments.length) clearAttachments(projectId);   // [v1.0.19.4] 附件发出即清
+    grow();
+  }, [projectId, sendMessage, clearDraft, quote, clearQuote, attachments, clearAttachments, grow]);
+  const doSendRef = useRef(doSend);
+  doSendRef.current = doSend;
+
+  // 弹层键盘导航 + 发送快捷键（handleKeyDown 是创建时闭包，全部读 ref）。
+  const handleKeyDownRef = useRef<(_view: unknown, event: KeyboardEvent) => boolean>(() => false);
+  handleKeyDownRef.current = (_view, event) => {
+    if (mentionOpenRef.current) {
+      const count = filteredMentionMembersRef.current.length;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const cur = mentionIndexRef.current;
+        const next = event.key === 'ArrowDown' ? (cur + 1) % count : (cur - 1 + count) % count;
+        setMentionIndex(next);
+        return true;
+      }
+      if ((event.key === 'Enter' && !event.ctrlKey && !event.metaKey) || event.key === 'Tab') {
+        const member = filteredMentionMembersRef.current[mentionIndexRef.current];
+        if (member) {
+          event.preventDefault();
+          insertMentionRef.current(member);
+          return true;
+        }
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMentionOpen(false);
+        setMentionQuery('');
+        return true;
+      }
+    }
+    /*
+     * [v0.8b #9] Ctrl/⌘ + Enter 发送；Enter 单独按 = 换行（TipTap 默认）。
+     * 给 Agent 的指令常常是分条的、带代码的——Enter 直接发，等于每敲一次回车推半句话。
+     */
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      doSendRef.current();
+      return true;
+    }
+    return false;
+  };
+
+  const editorRef = useRef<Editor | null>(null);
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [1, 2, 3] },
+      }),
+      Placeholder.configure({
+        placeholder: conn === 'live'
+          ? t('composer.02', { sendKey: SEND_KEY })
+          : t('composer.03'),
+      }),
+      Mention.configure({
+        HTMLAttributes: { class: 'mention-tag' },
+      }),
+      codeLineNumbers,
+    ],
+    content: markdownToTiptapDoc(text, mentionMatchers),
+    editorProps: {
+      attributes: {
+        'aria-label': t('composer.15'),
+        class: 'tiptap-input',
+      },
+      handleKeyDown: (view, event) => handleKeyDownRef.current(view, event),
+    },
+    onUpdate: ({ editor: ed }) => {
+      const md = tiptapDocToMarkdown(ed.getJSON());
+      if (projectIdRef.current) setDraft(projectIdRef.current, md);
+      setHasText(!!md.trim());
+      syncMentionRef.current(ed);
+      grow();
+    },
+    onSelectionUpdate: ({ editor: ed }) => { syncMentionRef.current(ed); },
+    onFocus: () => setFocus(true),
+    onBlur: () => setFocus(false),
+    onCreate: () => { grow(); },
+  }, []);
+
+  editorRef.current = editor;
+
+  // 换会话 → 编辑器换成另一段草稿（markdown 反序列化恢复）；mention 弹层收起。
+  useEffect(() => {
+    if (!editor || !projectId) return;
+    const md = useKnoweStore.getState().convs[projectId]?.draft ?? '';
+    editor.commands.setContent(markdownToTiptapDoc(md, mentionMatchers), { emitUpdate: false });
+    setMentionOpen(false);
+    setMentionQuery('');
+    setMentionIndex(0);
+    setHasText(!!md.trim());
+    grow();
+  }, [projectId, editor, mentionMatchers, grow]);
+
+  // [v0.40.0] 右键「引用」→ 光标进输入框。
+  useEffect(() => {
+    if (quote) editor?.commands.focus();
+  }, [quote, editor]);
+
+  // [v1.0.24.7-P0-3] 引用条跨会话错发·组件层双保险：store.switchProject 已治本，这里兜底。
   useEffect(() => {
     if (quote && quote.projectId !== projectId) clearQuote();
   }, [projectId, quote, clearQuote]);
@@ -251,49 +489,7 @@ export const Composer: React.FC = () => {
     if (mentionIndex >= filteredMentionMembers.length) setMentionIndex(0);
   }, [filteredMentionMembers.length, mentionIndex]);
 
-  const syncMentionFromCursor = useCallback((value: string, cursor: number | null): void => {
-    if (!canMention || cursor === null) {
-      setMentionOpen(false);
-      return;
-    }
-    const fragment = mentionFragmentAt(value, cursor);
-    if (!fragment) {
-      setMentionOpen(false);
-      setMentionQuery('');
-      return;
-    }
-    setMentionQuery(fragment.query);
-    setMentionIndex(0);
-    setMentionOpen(true);
-  }, [canMention]);
-
-  const insertMention = useCallback((member: Member): void => {
-    if (!projectId) return;
-    const ta = taRef.current;
-    const start = ta?.selectionStart ?? text.length;
-    const end = ta?.selectionEnd ?? start;
-    const fragment = mentionFragmentAt(text, start);
-    const replaceStart = fragment?.start ?? start;
-    const replaceEnd = fragment?.end ?? end;
-    const token = `@${mentionLabel(member)} `;
-    const next = text.slice(0, replaceStart) + token + text.slice(replaceEnd);
-    const nextCursor = replaceStart + token.length;
-
-    setDraft(projectId, next);
-    setMentionOpen(false);
-    setMentionQuery('');
-    setMentionIndex(0);
-    requestAnimationFrame(() => {
-      const current = taRef.current;
-      if (!current) return;
-      current.focus();
-      current.setSelectionRange(nextCursor, nextCursor);
-      grow();
-    });
-  }, [projectId, text, setDraft, grow]);
-
   // [v1.0.23.9] 头像右键菜单「@ 备注名」→ 把 @名字 插进输入框光标处。
-  // ContextMenu 发 knowe:insert-mention（带 agentId），这里复用 insertMention。
   useEffect(() => {
     const onInsertMention = (event: Event): void => {
       const detail = (event as CustomEvent<{ agentId?: string }>).detail;
@@ -307,99 +503,27 @@ export const Composer: React.FC = () => {
 
   const toggleMentionPicker = useCallback((): void => {
     if (!canMention || mentionMembers.length === 0) return;
+    const ed = editorRef.current;
+    if (!ed) return;
     if (mentionOpen) {
       setMentionOpen(false);
       setMentionQuery('');
       return;
     }
-    if (!projectId) return;
+    // @按钮不是单纯弹菜单：在光标处落下一个真实的 @，后续键入会自然变成过滤词。
+    ed.chain().focus().insertContent('@').run();
+  }, [canMention, mentionMembers.length, mentionOpen]);
 
-    const ta = taRef.current;
-    const start = ta?.selectionStart ?? text.length;
-    const end = ta?.selectionEnd ?? start;
-    const fragment = mentionFragmentAt(text, start);
-
-    // @按钮不是单纯弹菜单：在光标处落下一个真实的 @，这样后续键入会自然变成过滤词，
-    // 也不会被 textarea 的 onFocus（看见“没有 @”）立即把刚打开的菜单关掉。
-    let next = text;
-    let nextCursor = start;
-    if (!fragment) {
-      next = text.slice(0, start) + '@' + text.slice(end);
-      nextCursor = start + 1;
-      setDraft(projectId, next);
-    }
-
-    setMentionOpen(true);
-    setMentionQuery(fragment?.query ?? '');
-    setMentionIndex(0);
-    requestAnimationFrame(() => {
-      const current = taRef.current;
-      if (!current) return;
-      current.focus();
-      current.setSelectionRange(nextCursor, nextCursor);
-      grow();
-    });
-  }, [canMention, mentionMembers.length, mentionOpen, projectId, text, setDraft, grow]);
-
-  const doSend = useCallback(() => {
-    const t = text.trim();
-    // [v1.0.19.4] 只要有文字**或**有附件就能发；纯附件（无文字）也允许。
-    if ((!t && attachments.length === 0) || !projectId) return;
-    setMentionOpen(false);
-    setMentionQuery('');
-    /*
-     * [v0.40.1] 引用发送（README §4）——两条路分开：
-     *   · 发给后端的正文 = 结构化引用（Agent 在后台看到明确的引用/发言分隔）：
-     *       用户引用了 {名字} 的 "{完整原文}" ，用户说："{本轮正文}"
-     *   · 气泡上显示的 = 用户本轮正文 + 顶部一条 .qref 引用块（displayText + quote，见 store.sendMessage）。
-     */
-    if (quote) {
-      const structured = i18n.t('composer.quoteStructure', { name: quote.name, text: quote.text, verb: i18n.t('composer.17'), t });
-      sendMessage(structured, projectId, undefined, {
-        displayText: t,
-        quote: {
-          name: quote.name,
-          text: quote.text.length > 80 ? `${quote.text.slice(0, 80)}…` : quote.text,
-          ref: quote.itemKey,
-        },
-        ...(attachments.length ? { attachments: attachments as never } : {}),
-      });
-      clearQuote();
-    } else {
-      // 出站 + 乐观气泡（store 一手包办）；[v1.0.19.4] 带上本会话的附件。
-      sendMessage(t, projectId, undefined,
-        attachments.length ? { attachments: attachments as never } : undefined);
-    }
-    clearDraft(projectId);              // [v0.7 #1] 发出去了，草稿就没了——列表的临时置顶也跟着撤
-    if (attachments.length) clearAttachments(projectId);   // [v1.0.19.4] 附件发出即清
-    const ta = taRef.current;
-    if (ta) ta.style.height = 'auto';
-  }, [text, projectId, sendMessage, clearDraft, quote, clearQuote, attachments, clearAttachments]);
-
-  const idle = !text.trim() && attachments.length === 0;
+  const idle = !hasText && attachments.length === 0;
 
   /*
    * [v0.5 #11/#15] 展开：写长东西时，一行半的输入框根本不够用。
-   *
    * 展开后输入区顶到聊天区的 ~80%（只留顶上群聊名那一行可见），再点收回去。
-   * 另外那条分隔线也能直接上下拖（#15）——两条路通向同一个状态：
-   * 都只是改 `--composer-h` 这个 CSS 变量。拖拽时不走 React state（每像素
-   * setState 会把整条消息流重渲染，手感是黏的），松手才落一次。
+   * 两条路（展开键/拖分隔线）通向同一个状态：都只是改 --composer-h 这个 CSS 变量。
    */
   const [expanded, setExpanded] = useState(false);
   const dragRef = useRef<{ y: number; h: number } | null>(null);
 
-  /*
-   * [v0.8b #5] 展开之后到底能有多高，**得问屏幕**，不能拍脑袋写 80vh。
-   *
-   *   老代码：展开 = window.innerHeight * 0.8。可输入区住在 .chat-card 里，
-   *   上面还压着标题栏、外面还有边距——0.8 个窗口高既不是「顶到 chat-head」，
-   *   在小窗口下还会把消息流挤没。而且更要命的是：`--composer-h` 这个变量
-   *   **CSS 里根本没人读**（只有 :root 里一句默认值），所以拖那条分隔线拖了个寂寞。
-   *
-   *   现在：量出聊天卡的可用高度（卡高 − 头高 − 一条缝），CSS 用 --composer-h 定高。
-   *   拖拽和展开走的是同一个变量，两条路终于通向同一个状态。
-   */
   const maxComposerHeight = useCallback(() => {
     const card = document.querySelector('.chat-card') as HTMLElement | null;
     const head = document.querySelector('.chat-head') as HTMLElement | null;
@@ -417,13 +541,12 @@ export const Composer: React.FC = () => {
   const toggleExpand = useCallback(() => {
     setExpanded((was) => {
       const next = !was;
-      // 展开 = 一路顶到 chat-head 底下（差一条 EXPAND_GAP 的缝）
       setComposerHeight(next ? maxComposerHeight() : COMPOSER_MIN);
       return next;
     });
   }, [setComposerHeight, maxComposerHeight]);
 
-  // 窗口大小变了 → 展开态的高度得跟着重算，否则会撑破或缩水
+  // 窗口大小变了 → 展开态的高度得跟着重算。
   useEffect(() => {
     if (!expanded) return;
     const onResize = (): void => { setComposerHeight(maxComposerHeight()); };
@@ -445,7 +568,7 @@ export const Composer: React.FC = () => {
     const move = (e: PointerEvent): void => {
       const d = dragRef.current;
       if (!d) return;
-      const h = setComposerHeight(d.h + (d.y - e.clientY));   // 往上拖 → 变高
+      const h = setComposerHeight(d.h + (d.y - e.clientY));
       setExpanded(h > COMPOSER_MIN + 40);
     };
     const up = (): void => {
@@ -462,20 +585,36 @@ export const Composer: React.FC = () => {
   }, [setComposerHeight]);
 
   /*
-   * [v0.44.5] @候选浮层不再绑死在「整个输入框的上边框」。输入框展开后，那条
-   * 上边框会升得很高，旧的 bottom:100% 会把 280px 浮层顶出 .chat-card，随后又被
-   * overflow:hidden 裁掉。现在以真正的触发按钮为锚点，并以聊天卡片/窗口的交集
-   * 作为可见边界：默认放上方；放不下但下方能放时翻转；两边都放不下时选空间较大
-   * 的一侧并收紧 max-height。ResizeObserver 让拖高输入框时也能逐帧跟上。
+   * [v0.44.5] @候选浮层定位。[v1.0.37.3] 锚点从 @ 按钮改为**光标位置**
+   * （view.coordsAtPos）——tag 弹层跟随输入光标，而不是固定在按钮旁。
    */
   const positionMentionPicker = useCallback((): void => {
     const box = composerBoxRef.current;
-    const trigger = mentionButtonRef.current;
     const picker = mentionPickerRef.current;
-    if (!box || !trigger || !picker) return;
+    if (!box || !picker) return;
 
     const boxRect = box.getBoundingClientRect();
-    const triggerRect = trigger.getBoundingClientRect();
+    let trigger: { top: number; bottom: number; left: number } | null = null;
+    const ed = editorRef.current;
+    if (ed) {
+      try {
+        const coords = ed.view.coordsAtPos(ed.state.selection.$from.pos);
+        if (coords && coords.left >= 0 && coords.top >= 0) {
+          trigger = {
+            top: coords.top,
+            bottom: coords.bottom,
+            left: coords.left,
+          };
+        }
+      } catch {
+        trigger = null;
+      }
+    }
+    if (!trigger && mentionButtonRef.current) {
+      const r = mentionButtonRef.current.getBoundingClientRect();
+      trigger = { top: r.top, bottom: r.bottom, left: r.left };
+    }
+    if (!trigger) return;
     const pickerRect = picker.getBoundingClientRect();
     const cardRect = (box.closest('.chat-card') as HTMLElement | null)?.getBoundingClientRect();
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
@@ -503,8 +642,8 @@ export const Composer: React.FC = () => {
       MENTION_PICKER_MAX_HEIGHT,
       Math.max(picker.scrollHeight, pickerRect.height) || MENTION_PICKER_MAX_HEIGHT,
     );
-    const spaceAbove = Math.max(0, triggerRect.top - visibleTop - MENTION_PICKER_GAP);
-    const spaceBelow = Math.max(0, visibleBottom - triggerRect.bottom - MENTION_PICKER_GAP);
+    const spaceAbove = Math.max(0, trigger.top - visibleTop - MENTION_PICKER_GAP);
+    const spaceBelow = Math.max(0, visibleBottom - trigger.bottom - MENTION_PICKER_GAP);
     let placement: MentionPickerPosition['placement'] = 'top';
     if (naturalHeight > spaceAbove
         && (naturalHeight <= spaceBelow || spaceBelow > spaceAbove)) {
@@ -516,10 +655,10 @@ export const Composer: React.FC = () => {
 
     const pickerWidth = pickerRect.width || Math.min(286, Math.max(0, boxRect.width - 24));
     const maxViewportLeft = Math.max(visibleLeft, visibleRight - pickerWidth);
-    const viewportLeft = Math.min(Math.max(triggerRect.left, visibleLeft), maxViewportLeft);
+    const viewportLeft = Math.min(Math.max(trigger.left, visibleLeft), maxViewportLeft);
     const viewportTop = placement === 'top'
-      ? triggerRect.top - MENTION_PICKER_GAP - renderedHeight
-      : triggerRect.bottom + MENTION_PICKER_GAP;
+      ? trigger.top - MENTION_PICKER_GAP - renderedHeight
+      : trigger.bottom + MENTION_PICKER_GAP;
 
     const next: MentionPickerPosition = {
       left: Math.round(viewportLeft - boxRect.left),
@@ -569,11 +708,22 @@ export const Composer: React.FC = () => {
     };
   }, [mentionOpen, expanded, filteredMentionMembers.length, positionMentionPicker]);
 
+  // [v1.0.37.3 R3] 输入框右键 → Electron 原生编辑菜单（剪切/复制/粘贴/全选）。
+  // [v1.0.37.3 fix] 传应用语言给主进程（role 菜单不跟随系统语言，实测显示英文）。
+  const handleContextMenu = (e: React.MouseEvent): void => {
+    const bridge = (window as unknown as { knowe?: { showEditMenu?: (lang?: 'zh' | 'en') => void } }).knowe;
+    if (bridge?.showEditMenu) {
+      e.preventDefault();
+      bridge.showEditMenu(i18n.language?.toLowerCase().startsWith('zh') ? 'zh' : 'en');
+    }
+    // 无桥（浏览器兜底）→ 不 preventDefault，让浏览器原生菜单工作。
+  };
+
   return (
     <div
       ref={composerRef}
       className={'composer-wrap' + (expanded ? ' expanded' : '')}
-      /* [v0.40.0] 多选模式：输入区半透明不可用（照抄 reference 对 #composerWrap 的内联处理） */
+      /* [v0.40.0] 多选模式：输入区半透明不可用 */
       style={selecting ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
       aria-disabled={selecting || undefined}
     >
@@ -598,8 +748,7 @@ export const Composer: React.FC = () => {
         }}
       />
 
-      {/* [v0.40.0] 引用条（右键「引用」）。DOM 照 component-tree §D：
-          .quote-bar > (.qb-body > .qb-nm + .qb-tx) + .qb-x（点 × 撤销引用）。 */}
+      {/* [v0.40.0] 引用条（右键「引用」）。 */}
       <div id="quoteHolder">
         {quote && (
           <div className="quote-bar">
@@ -621,8 +770,7 @@ export const Composer: React.FC = () => {
         )}
       </div>
 
-      {/* [v1.0.19.4] 文件放置区域：输入框上方新展开的空间，文件卡左对齐、可换行，
-          不占用正常输入框空间；移除全部后平滑收回（DESIGN §2.1）。 */}
+      {/* [v1.0.19.4] 文件放置区域：输入框上方新展开的空间。 */}
       {attachments.length > 0 && (
         <div className="attach-strip" aria-label={t('composer.10')}>
           {attachments.map((file) => (
@@ -720,65 +868,14 @@ export const Composer: React.FC = () => {
           </div>
         )}
 
-        <textarea
-          ref={taRef}
-          rows={1}
-          value={text}
-          placeholder={conn === 'live'
-            ? t('composer.02', { sendKey: SEND_KEY })
-            : t('composer.03')}
-          aria-label={t('composer.15')}
-          onChange={(e) => {
-            if (projectId) setDraft(projectId, e.target.value);
-            syncMentionFromCursor(e.target.value, e.target.selectionStart);
-            grow();
-          }}
-          onClick={(e) => syncMentionFromCursor(e.currentTarget.value, e.currentTarget.selectionStart)}
-          onFocus={(e) => {
-            setFocus(true);
-            syncMentionFromCursor(e.currentTarget.value, e.currentTarget.selectionStart);
-          }}
-          onBlur={() => setFocus(false)}
-          onKeyDown={(e) => {
-            if (mentionOpen) {
-              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                const count = filteredMentionMembers.length;
-                if (count > 0) {
-                  setMentionIndex((current) => (
-                    e.key === 'ArrowDown' ? (current + 1) % count : (current - 1 + count) % count
-                  ));
-                }
-                return;
-              }
-              if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Tab') {
-                const member = filteredMentionMembers[mentionIndex];
-                if (member) {
-                  e.preventDefault();
-                  insertMention(member);
-                  return;
-                }
-              }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setMentionOpen(false);
-                return;
-              }
-            }
-
-            /*
-             * [v0.8b #9] Ctrl/⌘ + Enter 发送；Enter 单独按 = 换行。
-             *
-             *   跟 AI 说话和跟人发微信不是一回事：给 Agent 的指令常常是分条的、
-             *   带代码的、要改两遍的。Enter 直接发，等于每敲一次回车就把半句话推出去。
-             *   （这也是 ChatGPT / Claude / Cursor 的输入框都提供这个档位的原因。）
-             */
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              doSend();
-            }
-          }}
-        />
+        {/* [v1.0.37.3] textarea → TipTap 富文本（EditorContent）。右键走原生编辑菜单。 */}
+        <div
+          ref={editorElRef}
+          className="tiptap-wrap"
+          onContextMenu={handleContextMenu}
+        >
+          <EditorContent editor={editor} />
+        </div>
 
         {/* [v0.5 #11] 展开/收起——就在发送键左边 */}
         <button

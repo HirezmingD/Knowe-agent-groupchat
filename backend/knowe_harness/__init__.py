@@ -4,17 +4,14 @@ from .contracts import normalize_relative_path, stable_identifier
 from .store import TaskEnvelopeStore
 from .completion import (
     CompletionAwareTaskRunRepository,
-    CompletionCommitter,
     CompletionConflict,
     CompletionEvent,
     CompletionStatus,
     CompletionStatusPolicy,
     completion_policy,
     completion_scope_id,
-    CoordinatorAction,
     DecisionEvent,
     DecisionType,
-    InvalidCoordinatorDecision,
     OutboxEntry,
     OutboxState,
     ProjectionKind,
@@ -22,13 +19,11 @@ from .completion import (
     TaskJournalEntryV1,
     TaskResultV1,
     WaitToken,
-    classify_user_decision,
 )
 from .projections import CompletionProjector, ProjectionEffect, ProjectionFaultInjector
 
 __all__ = [
     "CompletionAwareTaskRunRepository",
-    "CompletionCommitter",
     "CompletionConflict",
     "CompletionEvent",
     "CompletionProjector",
@@ -36,10 +31,8 @@ __all__ = [
     "CompletionStatusPolicy",
     "completion_policy",
     "completion_scope_id",
-    "CoordinatorAction",
     "DecisionEvent",
     "DecisionType",
-    "InvalidCoordinatorDecision",
     "OutboxEntry",
     "OutboxState",
     "ProjectionEffect",
@@ -50,7 +43,6 @@ __all__ = [
     "TaskJournalEntryV1",
     "TaskResultV1",
     "WaitToken",
-    "classify_user_decision",
     "normalize_relative_path",
     "stable_identifier",
 ]

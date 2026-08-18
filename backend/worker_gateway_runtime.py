@@ -325,13 +325,13 @@ class WorkerRuntimeFactory:
         timeout_seconds = None if timeout in (None, "", 0, "0") else float(timeout)
         # [I-4] Only the wall-clock stop is configurable. No turn ceiling, no tool
         # error cap, no correction budget — those are the LLM's decisions.
-        # [v1.0.21.3] 语言化：prompts/<lang>/worker_prompt.md 存在则用之，否则沿用现状路径。
+        # [v1.0.21.3] 语言化：prompts/<lang>/worker_prompt.md 存在则用之，否则回退 prompts/en/。
         from .prompt_resolver import resolve_prompt_path
         _resolved_prompt = resolve_prompt_path("worker_prompt.md")
         runtime_config = RuntimeConfig(
             timeout_seconds=timeout_seconds,
             prompt_path=str(_resolved_prompt) if _resolved_prompt else str(
-                Path(__file__).with_name("worker_prompt.md")
+                Path(__file__).parent / "prompts" / "en" / "worker_prompt.md"
             ),
         )
         def register_active_run(run: TaskRun) -> None:

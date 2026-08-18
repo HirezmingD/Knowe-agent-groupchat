@@ -8,6 +8,18 @@
  *   · Composer 永不因 conn 卸载（断线时输入框还在）
  */
 
+// @vitest-environment jsdom
+
+// jsdom 没有 ResizeObserver（TipTap/Composer 的 @候选浮层用到）。测试级最小 polyfill。
+class RO {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+if (typeof (globalThis as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO;
+}
+
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, act, within } from '@testing-library/react';
@@ -280,15 +292,32 @@ describe('ChatStream · 消息流分发', () => {
 
 // ═══════════════════════════════════════════════════════════════
 describe('Composer', () => {
-  it('输入 + Enter → store.sendMessage（乐观气泡当场出现）', () => {
-    const spy = installSocketSpy();
-    seedConv('p1');
-    activate('p1');
-
+  // [v1.0.37.3] 输入内核 textarea → TipTap 富文本。jsdom 无法可靠模拟 contenteditable
+  // 逐键输入（ProseMirror 依赖 beforeinput/DOM mutation），改用「preset 草稿」驱动：
+  //   · 草稿恢复（markdown → 编辑器）→ 断言编辑器内容
+  //   · Ctrl/⌘+Enter 发送（handleKeyDown → doSend 从编辑器真源序列化）→ 断言出站
+  const typeText = (text: string): HTMLElement => {
+    useKnoweStore.getState().setDraft('p1', text);
     render(<Composer />);
-    const ta = screen.getByLabelText('消息输入框');
-    fireEvent.change(ta, { target: { value: '你好' } });
-    fireEvent.keyDown(ta, { key: 'Enter' });
+    return screen.getByLabelText('消息输入框');
+  };
+
+  it('草稿恢复：markdown 草稿 → 编辑器内容（影子策略）', () => {
+    installSocketSpy();
+    seedConv('p1'); activate('p1');
+
+    const ta = typeText('# 标题');
+    expect(ta).toBeTruthy();
+    // TipTap 把 markdown 反序列化为 heading 节点，渲染层 DOM 里应看到标题文字。
+    expect(ta.textContent).toContain('标题');
+  });
+
+  it('Ctrl+Enter → store.sendMessage（乐观气泡当场出现）', () => {
+    const spy = installSocketSpy();
+    seedConv('p1'); activate('p1');
+
+    const ta = typeText('你好');
+    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true });
 
     expect(spy.sent).toEqual([{ content: '你好', projectId: 'p1' }]);
 
@@ -297,14 +326,12 @@ describe('Composer', () => {
     expect(items[0]).toMatchObject({ kind: 'user', text: '你好', delivery: 'pending' });
   });
 
-  it('Shift+Enter → 换行，不发送', () => {
+  it('Enter 单独按 → 换行，不发送', () => {
     const spy = installSocketSpy();
     seedConv('p1'); activate('p1');
 
-    render(<Composer />);
-    const ta = screen.getByLabelText('消息输入框');
-    fireEvent.change(ta, { target: { value: '第一行' } });
-    fireEvent.keyDown(ta, { key: 'Enter', shiftKey: true });
+    const ta = typeText('第一行');
+    fireEvent.keyDown(ta, { key: 'Enter' });
 
     expect(spy.sent.length).toBe(0);
   });
@@ -325,12 +352,11 @@ describe('Composer', () => {
     seedConv('p1'); activate('p1');
     act(() => { useKnoweStore.setState({ conn: 'closed' as ConnStatus }); });
 
-    render(<Composer />);
-    const ta = screen.getByLabelText('消息输入框');
+    const ta = typeText('断线也要发');
     expect(ta).toBeTruthy();                       // 输入框没消失（v0.2 事故的专属回归）
 
-    fireEvent.change(ta, { target: { value: '断线也要发' } });
-    fireEvent.keyDown(ta, { key: 'Enter' });
+    fireEvent.keyDown(ta, { key: 'Enter', ctrlKey: true });
     expect(spy.sent.length).toBe(1);               // 交给 transport 响亮失败 + 回声哨兵
   });
 });
+

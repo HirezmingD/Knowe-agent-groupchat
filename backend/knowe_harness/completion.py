@@ -94,7 +94,7 @@ class CompletionStatusPolicy:
 _COMPLETION_STATUS_POLICIES: dict[CompletionStatus, CompletionStatusPolicy] = {
     CompletionStatus.SUCCEEDED: CompletionStatusPolicy(
         True, ("accept_delivery", "reject_delivery"), "NONE", "已完成",
-        "任务已经完成。", "执行成员已提交结果，等待总管审阅。",
+        "任务已经完成。", "执行成员已提交结果。",
     ),
     CompletionStatus.PARTIAL: CompletionStatusPolicy(
         True, ("accept_partial", "retry", "reject_delivery"), "WORKER", "部分完成",
@@ -181,33 +181,15 @@ class OutboxState(str, Enum):
 
 
 class DecisionType(str, Enum):
+    # [v1.0.37.2 R8] 仅保留被实际使用的值：PLAN_APPROVED/TASK_DISPATCHED
+    # （_record_typed_decision 派活/计划批准）+ SUPERSEDE_REQUESTED
+    # （commit_run 的 supersede 流程：新派活取代旧 WAITING 任务）。
     PLAN_APPROVED = "plan_approved"
     TASK_DISPATCHED = "task_dispatched"
-    DELIVERY_ACCEPTED = "delivery_accepted"
-    DELIVERY_REJECTED = "delivery_rejected"
-    DEPENDENCY_PROVIDED = "dependency_provided"
-    TASK_CANCELLED = "task_cancelled"
-    RETRY_REQUESTED = "retry_requested"
-    PARTIAL_ACCEPTED = "partial_accepted"
-    ROLLBACK_REQUESTED = "rollback_requested"
     SUPERSEDE_REQUESTED = "supersede_requested"
 
 
-class CoordinatorAction(str, Enum):
-    PROVIDE_DEPENDENCY = "provide_dependency"
-    CANCEL = "cancel"
-    ACCEPT_PARTIAL = "accept_partial"
-    RETRY = "retry"
-    REJECT = "reject"
-    ROLLBACK = "rollback"
-    SUPERSEDE = "supersede"
-
-
 class CompletionConflict(RuntimeError):
-    pass
-
-
-class InvalidCoordinatorDecision(ValueError):
     pass
 
 
@@ -2363,6 +2345,9 @@ class SQLiteCompletionStore:
         A process crash must not leave an accepted-partial/cancel/rollback/supersede
         CompletionEvent without the DecisionEvent that authorized it.  Both rows and the
         new event's outbox are therefore inserted in one SQLite transaction.
+
+        [v1.0.37.2 R8 修正] 保留：除 CompletionCommitter.decide（已删）外，
+        commit_run 的 supersede 流程（新派活取代旧 WAITING 任务）仍调用它。
         """
 
         event = self._build_transition_event(
@@ -2700,81 +2685,6 @@ class SQLiteCompletionStore:
         with self.db.transaction(immediate=False) as conn:
             row = conn.execute(query, params).fetchone()
         return None if row is None else WaitToken.from_dict(json_loads(row["payload_json"], {}))
-
-    def get_wait_token(self, wait_token_id: str) -> WaitToken | None:
-        with self.db.transaction(immediate=False) as conn:
-            row = conn.execute(
-                "SELECT payload_json FROM wait_tokens_v2 WHERE wait_token_id=?",
-                (wait_token_id,),
-            ).fetchone()
-        return None if row is None else WaitToken.from_dict(json_loads(row["payload_json"], {}))
-
-    def resume_wait(
-        self,
-        wait_token_id: str,
-        *,
-        answer: str,
-        answer_ref: str,
-        resume_run_id: str = "",
-        actor: str = "user",
-    ) -> WaitToken:
-        clean = str(answer).strip()
-        if not clean:
-            raise ValueError("waiting answer must be non-empty")
-        now = utc_now()
-        with self.db.transaction() as conn:
-            row = conn.execute(
-                "SELECT payload_json FROM wait_tokens_v2 WHERE wait_token_id=?",
-                (wait_token_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(wait_token_id)
-            token = WaitToken.from_dict(json_loads(row["payload_json"], {}))
-            if token.status == "resolved":
-                return token
-            if token.status not in {"open", "resuming"}:
-                raise CompletionConflict(f"wait token {wait_token_id} is {token.status}")
-            updated = replace(
-                token,
-                status="resuming",
-                answer=clean,
-                answer_ref=str(answer_ref),
-                resume_run_id=str(resume_run_id),
-                updated_at=now,
-            )
-            conn.execute(
-                """
-                UPDATE wait_tokens_v2
-                   SET status=?, answer=?, answer_ref=?, updated_at=?, payload_json=?
-                 WHERE wait_token_id=?
-                """,
-                (
-                    updated.status,
-                    updated.answer,
-                    updated.answer_ref,
-                    updated.updated_at,
-                    json_dumps(updated.to_dict()),
-                    wait_token_id,
-                ),
-            )
-            decision = DecisionEvent(
-                decision_id=_stable_id("dec_", wait_token_id, updated.answer, actor),
-                decision_type=DecisionType.DEPENDENCY_PROVIDED,
-                project_id=updated.project_id,
-                actor=actor,
-                task_id=updated.task_id,
-                attempt_id=updated.attempt_id,
-                completion_id=updated.completion_id,
-                reason="waiting_dependency_provided",
-                payload={
-                    "wait_token_id": wait_token_id,
-                    "answer_ref": updated.answer_ref,
-                    "resume_run_id": updated.resume_run_id,
-                },
-                provenance=updated.provenance,
-            )
-            self._insert_decision(conn, decision)
-        return updated
 
     def resolve_wait(self, wait_token_id: str, *, status: str = "resolved") -> WaitToken:
         if status not in {"resolved", "cancelled", "superseded"}:
@@ -3200,133 +3110,13 @@ class CompletionAwareTaskRunRepository:
         return self.delegate.list_by_state(state, limit=limit)
 
 
-class CompletionCommitter:
-    """Harness API used after non-delivery Runtime stops and by coordinator decisions."""
-
-    def __init__(self, store: SQLiteCompletionStore) -> None:
-        self.store = store
-
-    def commit_runtime_stop(self, run: TaskRun) -> CompletionEvent:
-        return self.store.commit_run(run)
-
-    def decide(
-        self,
-        completion_id: str,
-        action: CoordinatorAction | str,
-        *,
-        actor: str = "coordinator",
-        reason: str = "",
-        payload: Mapping[str, Any] | None = None,
-    ) -> tuple[CompletionEvent | None, DecisionEvent]:
-        prior = self.store.get(completion_id)
-        if prior is None:
-            raise KeyError(completion_id)
-        action = action if isinstance(action, CoordinatorAction) else CoordinatorAction(str(action))
-        data = dict(payload or {})
-        decision_type: DecisionType
-        transition_status: CompletionStatus | None = None
-        transition_reason = reason
-        transition_metadata: dict[str, Any] = dict(data)
-        rollback_of = ""
-
-        if action is CoordinatorAction.PROVIDE_DEPENDENCY:
-            if prior.status not in {CompletionStatus.WAITING, CompletionStatus.BLOCKED}:
-                raise InvalidCoordinatorDecision("provide_dependency requires WAITING or BLOCKED")
-            decision_type = DecisionType.DEPENDENCY_PROVIDED
-        elif action is CoordinatorAction.CANCEL:
-            decision_type = DecisionType.TASK_CANCELLED
-            transition_status = CompletionStatus.CANCELLED
-            transition_reason = reason or "cancelled"
-        elif action is CoordinatorAction.ACCEPT_PARTIAL:
-            if prior.status not in {CompletionStatus.FAILED, CompletionStatus.BLOCKED, CompletionStatus.PARTIAL}:
-                raise InvalidCoordinatorDecision("accept_partial requires FAILED/BLOCKED/PARTIAL")
-            if not reason.strip():
-                raise InvalidCoordinatorDecision("accept_partial requires an explicit reason")
-            decision_type = DecisionType.PARTIAL_ACCEPTED
-            transition_status = CompletionStatus.PARTIAL
-        elif action is CoordinatorAction.RETRY:
-            if prior.status is CompletionStatus.SUCCEEDED:
-                raise InvalidCoordinatorDecision("cannot retry a succeeded completion without rejection")
-            decision_type = DecisionType.RETRY_REQUESTED
-        elif action is CoordinatorAction.REJECT:
-            decision_type = DecisionType.DELIVERY_REJECTED
-            # Rejection is terminal for the current attempt.  Leaving the prior FAILED
-            # or PARTIAL completion active makes the task look retryable even though the
-            # acceptance owner explicitly ended this delivery.  A new retry, when
-            # desired, must be an explicit later decision with fresh lineage.
-            transition_status = CompletionStatus.CANCELLED
-            transition_reason = reason or "delivery_rejected"
-            transition_metadata.setdefault("rejected", True)
-        elif action is CoordinatorAction.ROLLBACK:
-            decision_type = DecisionType.ROLLBACK_REQUESTED
-            transition_status = CompletionStatus.ROLLED_BACK
-            transition_reason = reason or "rolled_back"
-            rollback_of = prior.completion_id
-        elif action is CoordinatorAction.SUPERSEDE:
-            decision_type = DecisionType.SUPERSEDE_REQUESTED
-            transition_status = CompletionStatus.SUPERSEDED
-            transition_reason = reason or "superseded"
-        else:  # pragma: no cover - Enum is exhaustive
-            raise InvalidCoordinatorDecision(str(action))
-
-        decision = DecisionEvent(
-            decision_id=_stable_id("dec_", prior.completion_id, action.value, actor, reason, data),
-            decision_type=decision_type,
-            project_id=prior.project_id,
-            actor=actor,
-            task_id=prior.task_id,
-            attempt_id=prior.attempt_id,
-            completion_id=prior.completion_id,
-            reason=reason,
-            payload={"action": action.value, **data},
-            provenance=prior.provenance,
-        )
-        if transition_status is None:
-            return None, self.store.record_decision(decision)
-
-        next_event, stored_decision = self.store.transition_with_decision(
-            prior,
-            transition_status,
-            decision,
-            actor=actor,
-            reason=transition_reason,
-            metadata=transition_metadata,
-            rollback_of_completion_id=rollback_of,
-        )
-        return next_event, stored_decision
-
-
-def classify_user_decision(text: str, *, explicit_control_action: str = "") -> DecisionType | None:
-    """Conservative classifier: conversational continuation is never delivery acceptance."""
-
-    action = str(explicit_control_action or "").strip().lower()
-    explicit = {
-        "approve_plan": DecisionType.PLAN_APPROVED,
-        "dispatch": DecisionType.TASK_DISPATCHED,
-        "accept_delivery": DecisionType.DELIVERY_ACCEPTED,
-        "reject_delivery": DecisionType.DELIVERY_REJECTED,
-    }
-    if action in explicit:
-        return explicit[action]
-    normalized = "".join(str(text or "").split()).lower()
-    if not normalized:
-        return None
-    # These phrases continue the conversation or authorize work; they do not attest output.
-    if normalized in {"然后呢", "继续", "继续做", "接着做", "可以", "好", "好的", "开始吧"}:
-        return None
-    return None
-
-
 __all__ = [
     "CompletionAwareTaskRunRepository",
-    "CompletionCommitter",
     "CompletionConflict",
     "CompletionEvent",
     "CompletionStatus",
-    "CoordinatorAction",
     "DecisionEvent",
     "DecisionType",
-    "InvalidCoordinatorDecision",
     "OutboxEntry",
     "OutboxState",
     "ProjectionKind",
@@ -3334,5 +3124,4 @@ __all__ = [
     "TaskJournalEntryV1",
     "TaskResultV1",
     "WaitToken",
-    "classify_user_decision",
 ]

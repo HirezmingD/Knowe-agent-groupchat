@@ -38,7 +38,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.engine as E                                          # noqa: E402
-from backend.engine import ACTION_CONTRACT, REPORT_NOTICE, ProjectEngine   # noqa: E402
+from backend.engine import ProjectEngine   # noqa: E402
 
 SOUL = Path(E.__file__).parent / "souls" / "coordinator.txt"
 
@@ -56,22 +56,8 @@ def bare() -> ProjectEngine:
 
 
 # ═══════════ ① 残留一：我 v0.27 漏掉的第五处 ═══════════
-
-def test_report_notice_no_longer_demands_talking_first() -> None:
-    """
-    ★ 「**也不要在没跟用户交代之前就直接派活**」——
-      这不是「允许先说」，是**要求先说，否则不许调工具**。
-      而它每交一次报告就注入一次，正好盖在最常见的那条派活路径上。
-    """
-    assert "先跟用户说清楚再 propose_next" not in REPORT_NOTICE
-    assert "也不要在没跟用户交代之前就直接派活" not in REPORT_NOTICE
-
-
-def test_report_notice_now_says_dispatch_directly() -> None:
-    assert "直接调 propose_next" in REPORT_NOTICE
-    assert "不用你先用文字预告一遍" in REPORT_NOTICE
-    assert "不要**重复派同一件活" in REPORT_NOTICE          # 它原本要守的东西，别丢
-
+# [v1.0.37.2 R1] REPORT_NOTICE 已随取消 PM 审阅删除（两条通知链一起删），
+# 原 test_report_notice_* 两个测试随之移除；结构性扫描测试保留。
 
 def test_no_prompt_anywhere_teaches_speak_then_call() -> None:
     """

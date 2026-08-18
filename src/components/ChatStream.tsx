@@ -881,6 +881,18 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
     const isUser = it.kind === 'user';
     const face = isUser ? null : faceCache(it.agentId);
     const senderName = isUser ? '我' : (face?.name ?? 'Agent');
+    // [v1.0.37.3 R4] 被右键的气泡 DOM（选中复制判定用：选中必须落在它内部）。
+    const groupEl = e.currentTarget as HTMLElement;
+
+    // [v1.0.37.3 R4-fix] 右键时刻快照选区：点击菜单项时 mousedown 会清除选区，
+    // 若在 onClick 才读 window.getSelection() 必是 collapsed → 复制回退成全量。
+    // 必须在 contextmenu 事件发生时捕获选中文本，菜单项 onClick 用快照。
+    const selSnap = window.getSelection();
+    const selAnchor = selSnap?.anchorNode instanceof Node ? selSnap.anchorNode : null;
+    const selInThisBubble = !!selAnchor && groupEl.contains(selAnchor);
+    const selectedSnap = selSnap && !selSnap.isCollapsed && selInThisBubble
+      ? selSnap.toString().trim()
+      : '';
 
     const fcName = (e.target as HTMLElement | null)
       ?.closest?.('[data-fc-name]')?.getAttribute('data-fc-name');
@@ -906,7 +918,10 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
       {
         icon: <IconCopy />, label: t('chat.stream.13'), key: '⌘C',
         onClick: () => {
-          void navigator.clipboard?.writeText(copyText);
+          // [v1.0.37.3 R4] 有选中（且落在被右键的气泡内）→ 复制选中的那段；
+          // 无选中 / 选中在别处（如输入框）→ 复制全量（fcName 或正文，现状逻辑）。
+          // ⚠️ 选区在右键时刻已快照（selectedSnap）——点击菜单项时选区已被清除。
+          void navigator.clipboard?.writeText(selectedSnap || copyText);
           toast(t('common.toastCopied'));
         },
       },

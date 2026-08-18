@@ -1559,6 +1559,24 @@ function registerIpc(): void {
     }
   });
 
+  // ④.5 [v1.0.37.3 R3] 输入框右键 → 原生编辑菜单（剪切/复制/粘贴/全选）。
+  // [v1.0.37.3 fix] role 菜单项 label 跟随 Electron locale（实测英文），改为显式 label +
+  // renderer 传应用语言（跟随 i18n，中英都对）；click 显式调 webContents 对应命令。
+  // Menu.popup 不带坐标 → 默认弹在鼠标当前位置（Windows 原生菜单体验）。
+  ipcMain.handle(IPC.showEditMenu, (_evt, lang?: string) => {
+    const win = BrowserWindow.fromWebContents(_evt.sender);
+    if (!win || win.isDestroyed()) return;
+    const zh = lang !== 'en';
+    const menu = Menu.buildFromTemplate([
+      { label: zh ? '剪切' : 'Cut', accelerator: 'CmdOrCtrl+X', click: () => win.webContents.cut() },
+      { label: zh ? '复制' : 'Copy', accelerator: 'CmdOrCtrl+C', click: () => win.webContents.copy() },
+      { label: zh ? '粘贴' : 'Paste', accelerator: 'CmdOrCtrl+V', click: () => win.webContents.paste() },
+      { type: 'separator' },
+      { label: zh ? '全选' : 'Select All', accelerator: 'CmdOrCtrl+A', click: () => win.webContents.selectAll() },
+    ]);
+    menu.popup({ window: win });
+  });
+
   // ⑤ 未读数：单向通知（on，不 handle）。更新角标 + 有未读就闪任务栏 & 托盘图标。
   // [v1.0.20.2] 去掉「窗口不在前台才闪」的条件——用户明确：只要还有未读，图标就一直闪；
   // 点开一个会话只消化它自己的未读，剩下没点开的继续闪，直到全部点开或点「忽略全部」。

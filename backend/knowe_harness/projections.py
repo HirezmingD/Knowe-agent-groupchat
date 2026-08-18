@@ -354,7 +354,7 @@ class CompletionProjector:
         summary = _event_summary(event)
         issues = "\n".join(event.gaps) or event.dependency or event.terminal_reason or "（无）"
         matches = {
-            CompletionStatus.SUCCEEDED: "待总管审阅：执行成员已提交结果。",
+            CompletionStatus.SUCCEEDED: "已完成：执行成员已提交结果。",
             CompletionStatus.PARTIAL: "部分交付已记录，等待总管决定是否接受。",
             CompletionStatus.WAITING: "否：任务保持开放，等待补充信息。",
             CompletionStatus.BLOCKED: "否：外部依赖或能力缺失。",

@@ -112,6 +112,8 @@ export interface KnoweBridge {
   revealLocalFile?(path: string, sig: string): Promise<LocalFileResult>;
   /** [v0.39.3] 用系统文件管理器打开指定路径（shell.openPath 语义）。 */
   openPath(dir: string): Promise<void>;
+  /** [v1.0.37.3 R3] 输入框右键 → 主进程弹原生编辑菜单（剪切/复制/粘贴/全选）。lang 跟随应用 i18n。 */
+  showEditMenu?(lang?: 'zh' | 'en'): void;
 
   /** 获取本次 Runtime 认证令牌（仅 Electron 内可用）。 */
   getRuntimeToken(): Promise<string>;
@@ -270,6 +272,8 @@ export const IPC = {
   selectDirectory: 'knowe:selectDirectory',
   /** [v0.39.3] 打开系统文件管理器到指定路径 */
   openPath: 'knowe:openPath',
+  /** [v1.0.37.3 R3] 输入框右键编辑菜单（渲染 → 主进程） */
+  showEditMenu: 'knowe:edit-menu:show',
   /** [v0.8d #5] 渲染进程 → 主进程：当前未读总数 */
   setUnread: 'knowe:unread:set',
   /** [v1.0.19.1] 渲染进程 → 主进程：推送有未读的会话明细（托盘悬停卡片用） */

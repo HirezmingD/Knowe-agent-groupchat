@@ -93,6 +93,9 @@ const api: KnoweBridge = {
   // ── 用系统文件管理器打开目录 ──
   openPath: (dir: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, dir),
 
+  // ── [v1.0.37.3 R3] 输入框右键 → 主进程原生编辑菜单（剪切/复制/粘贴/全选）──
+  showEditMenu: (): void => { void ipcRenderer.invoke(IPC.showEditMenu); },
+
   // ── 获取本次 Runtime 认证令牌（供 WebSocket 连接用）──
   getRuntimeToken: (): Promise<string> => ipcRenderer.invoke(IPC.getToken),
 

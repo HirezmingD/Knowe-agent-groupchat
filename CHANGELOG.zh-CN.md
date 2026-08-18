@@ -10,6 +10,25 @@
 
 ## v1.0.x — 产品化阶段
 
+### v1.0.37（2026-08-18）
+
+**提示词与工作流优化（核心）**
+- 项目经理（coordinator）提示词精简 74%（299→72 行，中英文同步）；笔误「项目经历」→「项目经理」
+- worker 提示词中文化：新增 `prompts/zh/worker_prompt.md` + `prompts/en/worker_prompt.md`，修复中文模式下 worker 全英文回复的 bug
+- 知知人性化：陪伴角色、不写禁令；修复英文版内容残缺
+- 非贪心派活：正向引导、不写禁令
+- 死文件清理：删除 `identity_block.md` ×2、`souls/worker.txt`、`backend/worker_prompt.md`；引擎不再写入 SOUL.md / IDENTITY.md
+
+**@tag 显示与 markdown 输入框（核心）**
+- 输入框从 textarea 重写为 TipTap 富文本：@tag 提及（复用选人弹层、光标锚定）+ 8 种 markdown 快捷输入 + 原生右键菜单 IPC
+- 新增 `tiptapMarkdown` 序列化器：编辑器 JSON ↔ markdown 双向转换（8 种节点 + mention），16 个单元测试
+- @tag 插入自动补真实空格——光标不再与胶囊边界重合（浏览器将光标绘制在 inline-block 边框处，CSS margin 无法解决）
+- 气泡右键复制尊重选中：气泡内有选中则复制选中段，无选中复制全量
+- Electron 原生编辑菜单（剪切/复制/粘贴/全选），经 preload 桥暴露
+- 新增依赖 @tiptap/react、starter-kit、extension-mention、extension-placeholder（^3.30.1）
+
+版本号升至 1.0.37
+
 ### v1.0.36（2026-08-16）
 
 **自定义 API（核心）**

@@ -321,7 +321,7 @@ html.dark .reasoning-scroll::before {
   gap: 10px;
 }
 
-.suggestion {
+.suggestions .suggestion {
   position: relative;
   appearance: none;
   border: 0;
@@ -348,7 +348,7 @@ html.dark .reasoning-scroll::before {
   will-change: transform;
 }
 
-.suggestion::before {
+.suggestions .suggestion::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -357,14 +357,14 @@ html.dark .reasoning-scroll::before {
   transition: opacity 0.3s ease;
   pointer-events: none;
 }
-.suggestion:hover {
+.suggestions .suggestion:hover {
   transform: translateY(-2px) scale(1.012);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--accent-ring), 0 10px 22px var(--shadow-1);
 }
-.suggestion:hover::before { opacity: 1; }
-.suggestion:active { transform: scale(0.975); }
-.suggestion:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 2px; }
+.suggestions .suggestion:hover::before { opacity: 1; }
+.suggestions .suggestion:active { transform: scale(0.975); }
+.suggestions .suggestion:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 2px; }
 
 .suggestions.consuming .suggestion {
   pointer-events: none;

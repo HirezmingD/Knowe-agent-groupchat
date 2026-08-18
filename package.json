@@ -1,7 +1,7 @@
 {
   "x-knowe-implementation": "[v1.0.13][R5]",
   "name": "knowe",
-  "version": "1.0.36",
+  "version": "1.0.37",
   "private": true,
   "license": "MIT",
   "description": "Command your Agent team through group chat",
@@ -29,6 +29,10 @@
     "dist:mac": "node scripts/clean-electron-build.mjs && npm run icon:icns && npm run electron:build && npm run copy:chromium && electron-builder --mac"
   },
   "dependencies": {
+    "@tiptap/extension-mention": "^3.30.1",
+    "@tiptap/extension-placeholder": "^3.30.1",
+    "@tiptap/react": "^3.30.1",
+    "@tiptap/starter-kit": "^3.30.1",
     "i18next": "^26.3.6",
     "immer": "^10.1.1",
     "jszip": "^3.10.1",

@@ -55,6 +55,7 @@
   --av-c-bg:#EDF2EE; --av-c-fg:#46795E;   
   --av-d-bg:#F5F0E6; --av-d-fg:#96793F;   
   --av-n-bg:#EBEAE5; --av-n-fg:#57554E;   
+  --code-bg:#2B2B30; --code-ink:#E7E7EB; --code-line:rgba(231,231,235,.40);
   color-scheme:light;}
 *,*::before,*::after {box-sizing:border-box;margin:0;padding:0}
 html,body {height:100%}
@@ -121,6 +122,7 @@ html.dark {--canvas:#1A1917;
   --av-c-bg:#242B26; --av-c-fg:#7FAE92;
   --av-d-bg:#2E2921; --av-d-fg:#C0A26A;
   --av-n-bg:#2B2A26; --av-n-fg:#A6A39B;
+  --code-bg:#F1EFEA; --code-ink:#1F1E1B; --code-line:rgba(31,30,27,.45);
   color-scheme:dark;}
 html.dark ::-webkit-scrollbar-thumb {background:rgba(236,234,228,0.12);border:3px solid transparent;background-clip:content-box}
 @keyframes pulseDot {

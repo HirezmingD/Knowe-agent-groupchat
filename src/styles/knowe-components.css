@@ -588,6 +588,58 @@ html.dark .composer.focus {background:var(--surface-sunken)}
   font-size:15px;line-height:24px;
   padding:6px 0;max-height:132px;
   background:transparent;}
+/* [v1.0.37.3] textarea → TipTap 富文本：同一套视觉，滚动由内容区自己接管 */
+.composer .tiptap-wrap {flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end}
+.composer .tiptap-input {
+  font-size:15px;line-height:24px;padding:6px 0;max-height:132px;
+  background:transparent;outline:none;overflow-y:auto;
+  word-break:break-word;white-space:pre-wrap;}
+.composer .tiptap-input > *:first-child {margin-top:0}
+.composer .tiptap-input > *:last-child {margin-bottom:0}
+.composer .tiptap-input p {margin:0}
+.composer .tiptap-input h1,.composer .tiptap-input h2,.composer .tiptap-input h3 {
+  margin:4px 0;line-height:1.4;position:relative;padding-left:2.2em;}
+.composer .tiptap-input h1::before,.composer .tiptap-input h2::before,.composer .tiptap-input h3::before {
+  content:attr(data-lv);position:absolute;left:0;top:50%;transform:translateY(-50%);
+  font-size:10px;font-weight:600;letter-spacing:.05em;
+  color:var(--accent);opacity:.72;user-select:none;white-space:nowrap;}
+.composer .tiptap-input h1::before {content:"H1"}
+.composer .tiptap-input h2::before {content:"H2"}
+.composer .tiptap-input h3::before {content:"H3"}
+.composer .tiptap-input ul,.composer .tiptap-input ol {margin:2px 0;padding-left:22px}
+.composer .tiptap-input ul li::marker,.composer .tiptap-input ol li::marker {color:var(--accent)}
+.composer .tiptap-input ol li::marker {font-weight:600;font-variant-numeric:tabular-nums}
+.composer .tiptap-input pre {
+  margin:4px 0;padding:8px 10px 8px 2.9em;border-radius:var(--r-md,8px);
+  background:var(--code-bg, var(--surface-sunken));color:var(--code-ink, var(--ink));
+  border:1px solid var(--hairline, rgba(127,127,127,.16));
+  overflow-x:auto;position:relative;}
+.composer .tiptap-input pre code {font-family:var(--font-mono, ui-monospace, Consolas, monospace);font-size:13px;
+  background:transparent;color:inherit;white-space:pre}
+.composer .tiptap-input pre .code-line {position:relative}
+.composer .tiptap-input pre .code-line::before {
+  content:attr(data-line);position:absolute;left:-2.3em;width:1.9em;text-align:right;
+  font-size:12px;color:var(--code-line, rgba(127,127,127,.4));user-select:none}
+.composer .tiptap-input p code {padding:1px 4px;border-radius:4px;
+  background:var(--surface-sunken, rgba(127,127,127,.12))}
+/* [v1.0.37.3 R1] @成员 tag：框起来的胶囊，退格整体删（ProseMirror atom 节点） */
+.composer .mention-tag {
+  display:inline-block;padding:0 6px;margin:0 1px;border-radius:6px;
+  background:var(--accent-tint);color:var(--accent);
+  border:1px solid var(--accent-ring);
+  cursor:default;user-select:none;white-space:nowrap;
+  vertical-align:baseline;}
+/* [v1.0.37.3 fix] TipTap suggestion 装饰 span（@ 触发字符）：清零四方向卡样式泄漏，
+   选人过程中 @ 就是普通字符，无框。选人后才变 .mention-tag 胶囊。 */
+.composer .tiptap-input span.suggestion {
+  box-shadow:none;min-height:0;padding:0;border-radius:0;border:none;
+  background:transparent;cursor:text;overflow:visible;
+  appearance:auto;position:static;color:inherit;transition:none;
+  will-change:auto;}
+/* [v1.0.37.3] TipTap placeholder：空文档时显示提示文案 */
+.composer .tiptap-input p.is-editor-empty:first-child::before {
+  content:attr(data-placeholder);float:left;height:0;pointer-events:none;
+  color:var(--text-muted, rgba(127,127,127,.6));}
 .composer .tools {display:flex;align-items:center;gap:2px;padding-bottom:0}
 .icon-at-glyph {display:inline-flex;align-items:center;justify-content:center;
   width:17px;height:24px;
@@ -1402,7 +1454,9 @@ body.resizing-v { cursor: row-resize; user-select: none; }
 .composer-wrap.expanded { flex: 0 1 auto; height: var(--composer-h);
   min-height: 0; display: flex; flex-direction: column; }
 .composer-wrap.expanded .composer { flex: 1; min-height: 0; align-items: stretch; }
-.composer-wrap.expanded textarea { height: 100% !important; max-height: none; resize: none; }
+.composer-wrap.expanded textarea,
+.composer-wrap.expanded .tiptap-wrap,
+.composer-wrap.expanded .tiptap-input { height: 100% !important; max-height: none; resize: none; }
 .composer-wrap.expanded .tools,
 .composer-wrap.expanded .composer-expand,
 .composer-wrap.expanded .send { align-self: flex-end; }

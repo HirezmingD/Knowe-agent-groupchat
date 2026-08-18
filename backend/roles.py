@@ -318,11 +318,10 @@ def identity_block(agent_id: str, role: str) -> str:
     prof = profile_for_agent_id(agent_id) or profile_for(role)
     if prof is None:
         return ""
-    label, good, not_for = _localized(prof)
+    label, good, _ = _localized(prof)
     return (
         msg("roles.template.identity.specialty", label=label)
         + msg("roles.template.identity.good_at", good=good.replace("**", ""))
-        + msg("roles.template.identity.not_for", not_for=not_for.replace("**", ""))
         + msg("roles.template.identity.tail")
     )
 
