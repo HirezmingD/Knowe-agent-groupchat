@@ -1442,7 +1442,12 @@ function registerIpc(): void {
     await updaterCheck(false);
   });
   // 触发「重启安装更新」：先优雅退出后端（避免安装器强杀残留）→ quitAndInstall
+  // [v1.0.37 fix] 必须先打 isQuitting 标记：否则 autoUpdater 触发的关闭窗口会被
+  //   closeToTray 逻辑拦成 hide（mainWindow.on('close')），主进程退不掉，
+  //   ShipIt 一直等 app 退出 → 死锁（症状：窗口消失但 dock 进程在、安装永不完成）。
+  //   后端反正由 onInstall(killBackend) 在 quitAndInstall 前先关掉，直接放行退出即可。
   ipcMain.handle(IPC.updateInstall, async () => {
+    isQuitting = true;
     await updaterInstall({ onInstall: killBackend });
   });
 
