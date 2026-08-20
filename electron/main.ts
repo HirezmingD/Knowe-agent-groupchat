@@ -11,7 +11,7 @@
  */
 
 import {
-  app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, session,
+  app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, nativeImage, session, Notification,
   type Session,
 } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -1441,13 +1441,47 @@ function registerIpc(): void {
   ipcMain.handle(IPC.updateCheck, async () => {
     await updaterCheck(false);
   });
+  // [v1.0.38 fix] 更新安装后「自动重新打开」兜底。
+  // Squirrel/ShipIt 的装完自动重启依赖旧 app 路径，productName 改名（Knowe→Knowe知知智能体）时
+  // 会 posix_spawn 失败 → 装完不自动打开、用户干等。
+  // 这里在主进程退出前 spawn 一个 detached 轮询器（不随主进程退出）：每 1 秒检查新 app 版本
+  // 是否已就位，装好立即 `open -a` 打开（按应用名定位，改名也能开），60 秒兜底后放弃。
+  function spawnUpdateRelaunchWatcher(): void {
+    const appName = app.getName(); // electron-builder 打包后的 productName（如「Knowe知知智能体」）
+    const targetVersion = getUpdateStatus().version;
+    if (!appName || !targetVersion) return;
+    const script = `
+APP="/Applications/${appName}.app"
+VER="${targetVersion}"
+LOOP=0
+while [ $LOOP -lt 60 ]; do
+  v=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null)
+  if [ "$v" = "$VER" ]; then open -a "${appName}" && exit 0; fi
+  LOOP=$((LOOP+1))
+  sleep 1
+done
+exit 0
+`;
+    const watcher = spawn('sh', ['-c', script], { detached: true, stdio: 'ignore' });
+    watcher.unref();
+    writeLog(`[updater] 已启动装完自动重开监控（目标 ${appName} v${targetVersion}，60s 兜底）`);
+  }
+
   // 触发「重启安装更新」：先优雅退出后端（避免安装器强杀残留）→ quitAndInstall
   // [v1.0.37 fix] 必须先打 isQuitting 标记：否则 autoUpdater 触发的关闭窗口会被
   //   closeToTray 逻辑拦成 hide（mainWindow.on('close')），主进程退不掉，
   //   ShipIt 一直等 app 退出 → 死锁（症状：窗口消失但 dock 进程在、安装永不完成）。
   //   后端反正由 onInstall(killBackend) 在 quitAndInstall 前先关掉，直接放行退出即可。
+  // [v1.0.38] 点按钮瞬间：①系统通知预告 ②spawn 轮询器（装好秒开，绕开 Squirrel 改名重启失效）。
   ipcMain.handle(IPC.updateInstall, async () => {
     isQuitting = true;
+    if (Notification.isSupported()) {
+      new Notification({
+        title: '正在安装更新',
+        body: '更新正在完成，应用将自动重新打开，请稍候…',
+      }).show();
+    }
+    spawnUpdateRelaunchWatcher();
     await updaterInstall({ onInstall: killBackend });
   });
 
