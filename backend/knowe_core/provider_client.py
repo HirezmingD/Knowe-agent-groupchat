@@ -37,6 +37,13 @@ from knowe_core.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from knowe_core.anthropic_codec import (
+    AnthropicStreamDecoder,
+    build_headers as build_anthropic_headers,
+    decode_response as decode_anthropic_response,
+    encode_request as encode_anthropic_request,
+    resolve_endpoint as resolve_anthropic_endpoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +204,7 @@ class ProviderClient:
         client_factory: ClientFactory | None = None,
         provider: str = "",
         backoff_base: float = DEFAULT_BACKOFF_BASE,
+        transport: str = "openai_chat",
     ):
         normalized_base = base_url.rstrip("/")
         # HTTPX requires an absolute URL even when MockTransport intercepts the request.
@@ -207,28 +215,35 @@ class ProviderClient:
         self.api_key = api_key
         self.model = model
         self.provider = provider
+        self.transport = transport or "openai_chat"
         self.timeout = timeout or DEFAULT_TIMEOUT
         self.max_retries = max(0, int(max_retries or 0))
         self.backoff_base = max(0.0, float(backoff_base or 0.0))
         self._client_factory = client_factory
         self._injected_client: httpx.AsyncClient | None = None
 
-        # Never send an invalid ``Bearer `` header.  Omitting it lets the provider return
-        # a useful 401 instead of httpx raising a local protocol error.
         self._headers = {
             "Content-Type": "application/json",
             **(extra_headers or {}),
         }
-        if api_key:
-            self._headers["Authorization"] = f"Bearer {api_key}"
 
-        # Respect a version segment already present in the configured base URL.  The
-        # request layer only appends /chat/completions; it never injects /v1.
-        stripped = self.base_url
-        if stripped.endswith("/chat/completions"):
-            self._endpoint = stripped
+        if self.transport == "anthropic_messages":
+            # Anthropic 走 x-api-key + anthropic-version，不打 /chat/completions。
+            # endpoint 由 codec 从 core_base_url 的保护形态还原（剥 /chat/completions#）。
+            self._endpoint = resolve_anthropic_endpoint(self.base_url)
+            # 剥掉 base_url 自带的 fragment（若有）——resolve 已处理，这里幂等兜底。
+            self._headers.update(build_anthropic_headers(api_key))
         else:
-            self._endpoint = f"{stripped}/chat/completions"
+            # OpenAI 兼容路径（openai_chat / codex_responses 的 chat/completions 兼容端点）
+            if api_key:
+                self._headers["Authorization"] = f"Bearer {api_key}"
+            # Respect a version segment already present in the configured base URL.  The
+            # request layer only appends /chat/completions; it never injects /v1.
+            stripped = self.base_url
+            if stripped.endswith("/chat/completions"):
+                self._endpoint = stripped
+            else:
+                self._endpoint = f"{stripped}/chat/completions"
 
     # ── HTTP client lifecycle ──
 
@@ -306,6 +321,15 @@ class ProviderClient:
         max_tokens: int | None = None,
         extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if self.transport == "anthropic_messages":
+            body = encode_anthropic_request(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return await self._request(body)
         body = self._build_body(
             messages,
             tools,
@@ -328,14 +352,23 @@ class ProviderClient:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Yield provider-neutral SSE events with safe pre-output retries."""
 
-        body = self._build_body(
-            messages,
-            tools,
-            temperature,
-            max_tokens,
-            stream=True,
-            extra_body=extra_body,
-        )
+        if self.transport == "anthropic_messages":
+            body = encode_anthropic_request(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        else:
+            body = self._build_body(
+                messages,
+                tools,
+                temperature,
+                max_tokens,
+                stream=True,
+                extra_body=extra_body,
+            )
         total_attempts = self.max_retries + 1
 
         for attempt in range(total_attempts):
@@ -627,12 +660,17 @@ class ProviderClient:
     async def _parse_sse_stream(
         self, response: httpx.Response,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Parse OpenAI-compatible SSE into a provider-neutral typed event stream.
+        """Parse provider SSE into a provider-neutral typed event stream.
 
         Chunk boundaries are unrelated to line boundaries, so a small line buffer is
         mandatory.  Choice metadata (especially ``finish_reason``) is retained: it is
         part of the control protocol and is used by the downstream protocol gate.
         """
+        if self.transport == "anthropic_messages":
+            async for event in self._parse_anthropic_sse_stream(response):
+                yield event
+            return
+
         buffer = ""
         saw_finish = False
 
@@ -662,6 +700,71 @@ class ProviderClient:
                 yield event
             if done and not saw_finish:
                 yield {"type": "finish", "reason": "stop"}
+
+    async def _parse_anthropic_sse_stream(
+        self, response: httpx.Response,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Parse Anthropic Messages API SSE into provider-neutral events.
+
+        Anthropic frames are ``event: <name>`` + ``data: {json}`` line pairs (blank line
+        terminates each frame).  ``AnthropicStreamDecoder`` accumulates tool input deltas
+        across frames and emits a full ``tool_call`` on the matching ``content_block_stop``.
+        """
+        decoder = AnthropicStreamDecoder()
+        buffer = ""
+        frame_data: str | None = None
+        emitted_finish = False
+
+        def flush() -> list[dict[str, Any]]:
+            """Decode the current ``data:`` frame into events (or [] on parse failure)."""
+            nonlocal frame_data, emitted_finish
+            raw = (frame_data or "").lstrip()
+            frame_data = None
+            payload = raw[len("data:"):].lstrip() if raw.startswith("data:") else raw
+            if not payload:
+                return []
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                logger.warning("Anthropic SSE JSON 解析失败：%s", exc)
+                return []
+            if not isinstance(data, dict):
+                return []
+            etype = data.get("type")
+            out: list[dict[str, Any]] = []
+            for e in decoder.feed(str(etype or ""), data):
+                if e.get("type") == "finish":
+                    emitted_finish = True
+                out.append(e)
+            return out
+
+        async for chunk in response.aiter_text():
+            if not chunk:
+                continue
+            buffer += chunk
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.rstrip()
+                if not line.strip():
+                    # blank line closes the frame
+                    for e in flush():
+                        yield e
+                elif line.startswith("data:"):
+                    if frame_data is not None:
+                        for e in flush():
+                            yield e
+                    frame_data = line
+                else:
+                    # event:/comment/keep-alive lines: not needed to decode (type is
+                    # carried in the JSON body); ignore them.
+                    pass
+
+        # flush any trailing frame (gateway may omit final blank line)
+        if frame_data is not None:
+            for e in flush():
+                yield e
+        if not emitted_finish:
+            yield {"type": "finish", "reason": "end_turn"}
 
     @classmethod
     def _parse_sse_line(cls, line: str) -> tuple[list[dict[str, Any]], bool]:

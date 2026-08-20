@@ -89,15 +89,18 @@ class RuntimeSettingsReadinessTest(unittest.TestCase):
         self.assertEqual(applied["main_model"]["model"], "not-tested")
 
     def test_zinnia_compatibility_is_separate_from_generic_model_readiness(self) -> None:
+        """知知传输兼容性与泛型模型就绪是两套机制（v1.0.38 起知知也支持 anthropic）。"""
         anthropic = binding(transport="anthropic_messages")
         fingerprint = runtime_settings.binding_fingerprint(anthropic)
         runtime_settings.apply({
             "main_model": anthropic,
             "expected_fingerprint": fingerprint,
         })
+        # 泛型模型就绪（coordinator）
         self.assertTrue(runtime_settings.model_ready_for("project-1", "coordinator"))
-        self.assertFalse(runtime_settings.zinnia_binding_status()[0])
-        self.assertFalse(runtime_settings.model_apply_ack()["zinnia_compatible"])
+        # [v1.0.38 B] 知知与所有 agent 共进退——anthropic 主模型下知知也可用
+        self.assertTrue(runtime_settings.zinnia_binding_status()[0])
+        self.assertTrue(runtime_settings.model_apply_ack()["zinnia_compatible"])
 
 
 class RuntimeSettingsWaiterTest(unittest.IsolatedAsyncioTestCase):

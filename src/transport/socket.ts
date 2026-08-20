@@ -168,6 +168,8 @@ export interface SocketAPI {
   ) => void;
   /** [v1.0.23.4] 群聊中途添加 Agent 员工（roles 为职能前缀数组，可重复）。 */
   addAgents: (projectId: string, roles: string[]) => void;
+  /** [v1.0.38.2] 成员改名 / 换头像（跨项目全局生效）。name/avatar 至少传一个，空串=还原。 */
+  updateAgentProfile: (projectId: string, agentId: string, attrs: { name?: string; avatar?: string }) => void;
   setProjectDirectory: (projectId: string, directory: string, requestId: string, projectName?: string) => void;
   cancelProjectDirectory: (projectId: string, requestId?: string) => void;
   requestSnapshot: (projectId: string) => void;
@@ -905,6 +907,21 @@ export function createSocket({ url = runtimeWsUrl(), callbacks }: SocketConfig):
      */
     addAgents(projectId: string, roles: string[]): void {
       sendRaw({ type: 'add_agents', project_id: projectId, roles } as OutboundCommand);
+    },
+
+    /**
+     * [v1.0.38] 成员改名 / 换头像（按项目隔离生效）。
+     * name/avatar 至少传一个；空串 = 还原（回默认）。
+     */
+    updateAgentProfile(projectId: string, agentId: string, attrs: { name?: string; avatar?: string }): void {
+      const payload: Record<string, unknown> = {
+        type: 'update_agent_profile',
+        project_id: projectId,
+        agent_id: agentId,
+      };
+      if (typeof attrs.name === 'string') payload.name = attrs.name;
+      if (typeof attrs.avatar === 'string') payload.avatar = attrs.avatar;
+      sendRaw(payload as OutboundCommand);
     },
 
     setProjectDirectory(projectId: string, directory: string, requestId: string, projectName?: string): void {

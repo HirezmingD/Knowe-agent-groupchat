@@ -329,7 +329,7 @@ def _zinnia_usable(raw: Any) -> bool:
     return bool(
         _binding_complete(binding)
         and binding is not None
-        and binding.get("transport", "openai_chat") in {"openai_chat", "codex_responses"}
+        and binding.get("transport", "openai_chat") in {"openai_chat", "codex_responses", "anthropic_messages"}
     )
 
 

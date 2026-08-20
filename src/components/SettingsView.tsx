@@ -621,7 +621,7 @@ const AboutPane: React.FC = () => {
       <SetItem t={t('settings.view.12')} d={t('settings.view.19')}>
         <a
           className="set-link"
-          href="https://www.knowe-agent.online"
+          href="https://knowe-agent.online"
           target="_blank"
           rel="noreferrer"
         >
@@ -674,6 +674,7 @@ const AboutPane: React.FC = () => {
           <div className="si-d set-author">
             {t('settings.view.aboutText')}{' '}
             <a className="set-link" href={`mailto:${t('settings.view.aboutEmail')}`}>{t('settings.view.aboutEmail')}</a>
+            {t('settings.view.aboutWechat')}
           </div>
         </div>
       </div>

@@ -1128,7 +1128,8 @@ def _parse_agents(raw: Any, engine: "ProjectEngine") -> list[dict[str, str]]:
         occupied.add(mid)
         members.append({
             "id": mid,
-            "role": role,
+            # [v1.0.38] 审批卡上的角色也走 _display_role（用「美工设计助手」新提法）。
+            "role": engine._display_role(mid, role),
             # ★ [v0.9d] 名字**问引擎要**（reserve_name）：
             #     · 花名册里有他（哪怕是**归档**的）→ 旧名原样拿回来 —— 他回来了，他还是他
             #     · 没有 → 掷一个（中英各一半，同项目内不重名），先记在内存里

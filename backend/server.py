@@ -262,6 +262,7 @@ def _reveal_in_file_manager(target: Path) -> None:
     raise RuntimeError(msg("server.py.008"))
 from .config import CONFIG
 from . import runtime_settings   # [v0.44 设置] /settings 端点 + 引擎热更新的权威状态
+from . import identity_store     # [v1.0.38.2] 全局成员身份表（跨项目改名/换头像真源）
 from . import aux_client         # [v1.0.19.4] 报错翻译（附件被打回时把机器错误译成人话）
 from .attachments import AttachmentError, build_parts, echo_meta
 from .feature_flags import FeatureFlag, enabled as feature_enabled, snapshot as feature_flag_snapshot
@@ -389,6 +390,9 @@ class KnoweServer:
         raw_dir = CONFIG.data_dir if data_dir is None else data_dir
         self.store: Store | None = Store(raw_dir) if raw_dir else None
         self.data_root = Path(raw_dir or "./data").expanduser().resolve()
+        # [v1.0.38.2] 全局成员身份表：有真实落盘目录才 register（纯内存测试模式不写盘）
+        if self.store is not None:
+            identity_store.configure(self.data_root)
         self.hub = Hub(store=self.store)
         self.engines: dict[str, ProjectEngine] = {}
         self.platform: ProjectEngine | None = None   # [v0.4] 知知常驻的平台引擎
@@ -2166,18 +2170,34 @@ class KnoweServer:
             if aid == COORDINATOR:
                 # [v1.0.22.1-对齐] 项目经理名/角色随语言实时：磁盘花名册可能存着
                 # 旧语言快照（如英文启动时落盘的 Coordinator），切回中文必须覆盖。
-                return {
+                base = {
                     "id": aid,
                     "role": msg("engine.007"),
                     "name": msg("engine.007"),
                 }
-            return {
-                "id": aid,
-                "role": r,
-                # [v0.9d] 盘上没名字 → 用**稳定**的老公式兜底（绝不在读的路径上掷随机名）。
-                #   正常情况下走不到这儿：_restore_roster 开机时已经把没名字的补掉了。
-                "name": info[aid].get("name") or legacy_display_name(aid, r),
-            }
+            else:
+                # [v1.0.38] 花名册 role 也走 _display_role：统一用「美工设计助手」这类
+                #   新提法，不许再把旧的「UI/UX 设计」职能标签下发到前端。
+                shown_role = eng._display_role(aid, r) if eng is not None else r
+                base = {
+                    "id": aid,
+                    "role": shown_role,
+                    # [v0.9d] 盘上没名字 → 用**稳定**的老公式兜底（绝不在读的路径上掷随机名）。
+                    #   正常情况下走不到这儿：_restore_roster 开机时已经把没名字的补掉了。
+                    "name": info[aid].get("name") or legacy_display_name(aid, r),
+                }
+            _idstore = identity_store.get()
+            # [v1.0.38] 本项目自定义名优先下发（仅本项目生效）。花名册 name 是建群时的
+            #   固定名（如「Bluff」）；用户在本项目联系人改过名后，这里必须下发本项目
+            #   identity 表的 custom_name，否则前端重启后只读得到花名册名 → 名字「变回默认」。
+            _cn = _idstore.custom_name(project_id, aid) if _idstore is not None else None
+            if _cn:
+                base["name"] = _cn
+            # [v1.0.38] 本项目自定义头像优先下发（仅本项目生效）
+            _av = _idstore.custom_avatar(project_id, aid) if _idstore is not None else None
+            if _av:
+                base["avatar"] = _av
+            return base
 
         rows = [row(aid) for aid in info if aid != COORDINATOR]
         if COORDINATOR in info:
@@ -2642,6 +2662,7 @@ class KnoweServer:
                     base_url=aux["base_url"] if aux_ok else CONFIG.deepseek_base_url,
                     model=aux["model"] if aux_ok else CONFIG.deepseek_model,
                     timeout_s=8.0, what=msg("server.py.088"),
+                    transport=aux["transport"] if aux_ok else "openai_chat",
                 ),
                 timeout=9.0,
             )
@@ -3447,7 +3468,9 @@ class KnoweServer:
                 eng.reserve_name(aid, role_label)               # [v0.9c] 掷名 + 落盘，重启不变
                 eng.add_member(aid, role_label)                 # 建实例 + 进花名册 + 幂等
                 created_members.append({
-                    "id": aid, "role": role_label,
+                    "id": aid,
+                    # [v1.0.38] 花名册 role 统一走 _display_role（用「美工设计助手」新提法）。
+                    "role": eng._display_role(aid, role_label),
                     "name": eng.member_name(aid),
                 })
             except Exception:
@@ -3617,6 +3640,89 @@ class KnoweServer:
                     await eng.welcome_worker(m["id"])
                 except Exception:
                     log.exception("[%s] 中途添加打招呼失败 %s", project_id, m.get("id"))
+
+    # ── update_agent_profile（[v1.0.38] 改名 / 换头像，按项目隔离）──
+    async def _cmd_update_agent_profile(self, client: Client, data: dict[str, Any]) -> None:
+        """
+        [v1.0.38] 用户改成员名字 / 换头像。
+
+        语义（PRD §2.1 / 架构 §2.4）：
+          · v1.0.38.x 的全局身份表是缺陷：A 群把某职位（fe_1）改名的结果，
+            全软件所有同职位成员（含新群）都被污染。v1.0.38 改为**按项目隔离**：
+          · 写**分项目身份表**（identities.json 按 project_id 分组），键是
+            (project_id, agent_id)，只改当前群
+          · name / avatar 任一即可（都传 = 一次改两样）
+          · 空串 = 还原（清自定义，回花名册名/前端派生头像）
+          · 广播 agent_profile_updated 到**当前项目** → 前端只刷新这个群
+
+        注意：role **不可改**（用户底线），本指令不接受 role 字段。
+        """
+        agent_id = data.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            await self._server_error(client, msg("server.py.121"))
+            return
+        project_id = data.get("project_id")
+        if not isinstance(project_id, str) or not project_id:
+            await self._server_error(client, msg("server.py.334"))
+            return
+        try:
+            project_id = self._canonical_project_id_from_request(project_id)
+        except ProjectIdResolutionError:
+            await self._server_error(client, msg("server.py.334"))
+            return
+        store = identity_store.get()
+        if store is None:
+            await self._server_error(client, msg("server.py.334"))
+            return
+
+        new_name = data.get("name")
+        new_avatar = data.get("avatar")
+
+        changed = {"agent_id": agent_id}
+        if isinstance(new_name, str):
+            store.set_name(project_id, agent_id, new_name.strip())
+            changed["name"] = store.custom_name(project_id, agent_id) or ""
+        if isinstance(new_avatar, str):
+            store.set_avatar(project_id, agent_id, new_avatar.strip())
+            changed["avatar"] = store.custom_avatar(project_id, agent_id) or ""
+
+        if "name" not in changed and "avatar" not in changed:
+            await self._server_error(client, msg("server.py.335"))
+            return
+
+        # 只广播当前项目引擎 → 前端只刷新这个群
+        eng = self.engines.get(project_id)
+        if eng is None:
+            log.warning("[%s] agent_profile_updated：引擎不在跑，改名/换头像仅落盘", project_id)
+        else:
+            try:
+                await eng.emit({"type": "agent_profile_updated", **changed})
+            except Exception:
+                log.exception("[%s] 广播 agent_profile_updated 失败", eng.project_id)
+
+            # [v1.0.38] 改名传导：名字一变，项目经理必须在上下文里明确知道
+            # 这个人现在叫什么（否则他会凭对话历史里出现过的旧名说话）。
+            # 只对「名字」变才通知（换头像不必打扰）；轻量一句，幂等（idempotency_key）。
+            if "name" in changed and eng is not None:
+                new_label = str(changed.get("name") or "")
+                if new_label:
+                    old_label = ""
+                    try:
+                        stored = eng.stored_agent_info(agent_id) if hasattr(eng, "stored_agent_info") else {}
+                        old_label = str((stored or {}).get("name") or "") or new_label
+                    except Exception:
+                        old_label = ""
+                    try:
+                        await eng.notify_coordinator(
+                            f"用户把成员 {agent_id}（{old_label}）的名字改成了「{new_label}」。"
+                            f"以后提到他就用新名字「{new_label}」，别再叫旧名。",
+                            priority="background",
+                            idempotency_key=f"rename:{project_id}:{agent_id}:{new_label}:{changed.get('avatar','')}",
+                        )
+                    except Exception:
+                        log.exception("[%s] 改名通知 PM 失败", project_id)
+
+        await self.hub.send_to(client, {"type": "agent_profile_updated_ack", **changed})
 
     # ── request_snapshot ──
     async def _cmd_request_snapshot(self, client: Client, data: dict[str, Any]) -> None:

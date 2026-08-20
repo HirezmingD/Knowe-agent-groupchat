@@ -128,7 +128,7 @@ export const FirstRunModelGate: React.FC = () => {
     <div className="frg-scrim" role="dialog" aria-modal="true" aria-label={t('first.run.model.gate.11')}>
       <div className="frg-card">
         <div className="frg-head">
-          <div className="frg-badge">Knowe</div>
+          <div className="frg-badge">Knowe知知智能体</div>
           <h2 className="frg-title">{t('first.run.model.gate.06')}</h2>
           <p className="frg-sub">
             {t('first.run.model.gate.intro')}

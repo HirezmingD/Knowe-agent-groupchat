@@ -18,7 +18,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useCachedT } from '../i18n';
-import { roleLabel } from '../shared/roleLabel';
+import { assistantRoleLabel } from '../shared/roleLabel';
 import { Avatar } from './Avatar';
 import { Markdown } from './markdown';
 import { IconAlert, IconCheck, IconForward } from './icons';
@@ -51,7 +51,8 @@ export interface AgentFace {
 export function senderLineOf(face: AgentFace): string {
   const role = (face.role ?? '').trim();
   if (!role || face.name.includes(role)) return face.name;
-  return `${face.name} · ${roleLabel(role)}`;
+  // [v1.0.38.2] 助手化称呼 + 全角括号格式：林知远（界面设计助手）
+  return `${face.name}（${assistantRoleLabel(role)}）`;
 }
 
 // ═══════════════════════════════════════════════════════════════

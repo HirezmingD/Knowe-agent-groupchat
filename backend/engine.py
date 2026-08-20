@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 from knowe_core.provider_identity import humanize_provider_error, provider_target
 from .token_pricing import estimate_cost
 from .i18n_backend import msg
+from . import identity_store  # [v1.0.38.2] 全局成员身份表（跨项目改名/换头像真源）
 from .content_compress import snapshot_compression_stats  # [v1.0.34-M4] 压缩台账快照
 from knowe_provenance import current_provenance_dict, normalize_provenance
 from knowe_harness import (
@@ -4369,6 +4370,7 @@ class ProjectEngine:
                 model=aux["model"] if aux_ok else CONFIG.deepseek_model,
                 timeout_s=CONFIG.adjust_timeout_s,
                 what=msg("engine.186"),
+                transport=aux["transport"] if aux_ok else "openai_chat",
             )
         except asyncio.CancelledError:
             raise                                  # 被新意见顶掉：外层翻译成 silent 结果
@@ -5671,6 +5673,7 @@ class ProjectEngine:
             model=model,
             timeout_s=max(5.0, float(CONFIG.knowledge_distill_timeout_s)),
             what=msg("engine.218"),
+            transport=aux["transport"] if aux_ok else "openai_chat",
         )
 
     def _schedule_knowledge_distill(
@@ -6976,7 +6979,16 @@ class ProjectEngine:
 
         读的路径上掷随机名，就等于把「每次开 App 名字都变」原样请回来。
         内存里没有、盘上也没有（老项目、没落过盘）→ 退回稳定的老公式（「前端 1」）。
+
+        [v1.0.38.2] 优先级（全局用户自定义 > coordinator 语言名 > 缓存 > 花名册 > 老公式）：
+          用户改过名（全局身份表 custom_name）→ 用它，且优先于一切（含 coordinator）。
         """
+        custom = None
+        _idstore = identity_store.get()
+        if _idstore is not None:
+            custom = _idstore.custom_name(self.project_id, agent_id)
+        if custom:
+            return custom
         if agent_id == COORDINATOR:
             # [v1.0.22.1-对齐] 项目经理名现取（见 reserve_name 同款注释）：不读缓存、
             # 不读磁盘语言快照，切语言下一轮即生效。
@@ -7024,8 +7036,13 @@ class ProjectEngine:
         花名册持久化的 role 是创建时的语言快照（可能是中文），
         所有要给人（前端 / 模型）看的出口都走这里，不把快照原文放出去：
           · coordinator  → msg("engine.007")（zh: 项目经理 / en: Leader）
-          · 其他成员     → 前缀命中 ROLE_PROFILES → 本地化标签（zh: 前端 / en: Frontend）
+          · 其他成员     → 前缀命中 ROLE_PROFILES → 优先用**助手称呼**
+            （「美工设计助手」，PRD §2.2 用户审定的新提法），查不到才用本地化职能标签
           · 兜底         → msg("engine.106")（zh: 成员 / en: Member）
+
+        [v1.0.38] 不再两套并行走：worker 的「你是谁」和 PM 的【当前团队】都必须
+        用「美工设计助手」这类新提法，不许再落到旧的「UI/UX 设计」职能标签。
+        前端那边本就用 assistantRoleLabel 归一，这里统一后两端口径一致。
         """
         if agent_id == COORDINATOR:
             return msg("engine.007")
@@ -7033,12 +7050,21 @@ class ProjectEngine:
         if role:
             prof = roles.profile_for(role) or roles.profile_for_agent_id(agent_id)
             if prof is not None:
+                an = roles.assistant_name_for(role)
+                if an:
+                    return an
                 return roles.localized_label(prof)
         return msg("engine.106")
 
     def member_info(self, agent_id: str, role: str = "") -> dict[str, str]:
-        """给前端的一条成员记录：{id, role, name}。发事件的地方都问它要，别各拼各的。"""
-        return {"id": agent_id, "role": self._display_role(agent_id, role), "name": self.member_name(agent_id)}
+        """给前端的一条成员记录：{id, role, name, avatar}。发事件的地方都问它要，别各拼各的。"""
+        info = {"id": agent_id, "role": self._display_role(agent_id, role), "name": self.member_name(agent_id)}
+        _idstore = identity_store.get()
+        if _idstore is not None:
+            av = _idstore.custom_avatar(self.project_id, agent_id)
+            if av:
+                info["avatar"] = av
+        return info
 
     # ═══════════════════════════════════════════════════════════
     # [v0.12 D · 问题一] 统一身份层：id ↔ 名字 ↔ 角色，单点真源
@@ -7073,8 +7099,12 @@ class ProjectEngine:
         为什么要写得这么直白：模型不会自己把「名字 Kit」「角色 UI/UX」「id ux_1」
         联想成同一个人。必须明说：**别人叫你哪一个，指的都是你。** 这一句就是
         Kit 不再否认自己是 Kit 的关键。
+
+        [v1.0.38.2] 末尾追加「助手称呼 + 能帮你…」（roles.assistant_identity_line），
+        让成员知道自己是哪个方向的设计助手、该往哪使劲（PRD §3）。
         """
         idy = self.identity(agent_id)
+        assistant_line = roles.assistant_identity_line(agent_id, idy["role"])
         if feature_enabled(FeatureFlag.IDENTITY_CONTRACT_V1):
             contract = identity_for(
                 agent_id,
@@ -7087,6 +7117,7 @@ class ProjectEngine:
                 + msg("engine.identity.same_person", name=idy['name'], role=idy['role'], id=idy['id'])
                 + msg("engine.239")
                 + roles.identity_block(agent_id, idy["role"])
+                + (("\n" + assistant_line) if assistant_line else "")
             )
         return (
              msg("engine.240")
@@ -7100,6 +7131,7 @@ class ProjectEngine:
             #   给它这个角色的看家本领和边界，它才会按这一行的方式想问题——
             #   而不是「技术写作」四个字配上一套通用做法。
             + roles.identity_block(agent_id, idy["role"])
+            + (("\n" + assistant_line) if assistant_line else "")
         )
 
     # ═══════════════════════════════════════════════════════════
@@ -7688,6 +7720,7 @@ class ProjectEngine:
                     base_url=aux["base_url"] if aux_ok else CONFIG.deepseek_base_url,
                     model=aux["model"] if aux_ok else CONFIG.deepseek_model,
                     timeout_s=8.0, what=msg("engine.272"),
+                    transport=aux["transport"] if aux_ok else "openai_chat",
                 ),
                 timeout=9.0,
             )
@@ -7737,6 +7770,7 @@ class ProjectEngine:
             read_timeout_s=CONFIG.provider_read_timeout_s,
             write_timeout_s=CONFIG.provider_write_timeout_s,
             pool_timeout_s=CONFIG.provider_pool_timeout_s,
+            transport=binding.get("transport", "openai_chat"),
         )
         agent = KnoweAgent(
             agent_id=agent_id,
@@ -7887,6 +7921,7 @@ class ProjectEngine:
                 max_tokens=800,
                 timeout_s=CONFIG.adjust_timeout_s,
                 what=msg("engine.170"),
+                transport=aux["transport"] if aux_ok else "openai_chat",
             )
             items = _parse_suggestions_json(raw)
             if items:

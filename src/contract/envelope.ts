@@ -256,6 +256,13 @@ export const MemberSchema = z.object({
    */
   name: z.string().optional(),
   display_name: z.string().optional(),
+  /**
+   * [v1.0.38.2] 后端下发的全局自定义头像（dataURL）。来自全局成员身份表，
+   *   `_members_of` 在用户换过头像时捎带。optional：绝大多数成员没自定义 → undefined。
+   *   ★ 必须出现在 schema 里，否则 socket 层 zod 校验会把未知字段 `avatar` **剥掉**，
+   *     前端就拿不到 → registerMember 回退默认脸（「重启后头像恢复默认」的根因之一）。
+   */
+  avatar: z.string().optional(),
   status: z.enum(['idle', 'busy']).optional(),
 });
 export type Member = z.infer<typeof MemberSchema>;
@@ -579,6 +586,24 @@ export const AgentRemovedSchema = z.object({
   seq: z.number().int().min(0),
 });
 export type AgentRemoved = z.infer<typeof AgentRemovedSchema>;
+
+/**
+ * [v1.0.38.2] 成员改名 / 换头像（跨项目全局）。
+ * 后端写全局身份表后广播；前端按 project_id 路由到各项目 conv，state.ts 拦截里
+ * 更新对应成员的 display.name / display.avatarUrl。name/avatar 空串 = 还原（回默认）。
+ */
+export const AgentProfileUpdatedSchema = z.object({
+  type: z.literal('agent_profile_updated'),
+  /** 全局成员 id（fe_1 之类，与 UI 的 m.id 一致） */
+  agent_id: z.string(),
+  name: z.string().optional(),
+  avatar: z.string().optional(),
+  project_id: z.string(),
+  project_name: z.string().optional(),
+  ts: z.string().optional(),
+  seq: z.number().int().min(0),
+});
+export type AgentProfileUpdated = z.infer<typeof AgentProfileUpdatedSchema>;
 
 /** 指令已注入（成员收到任务） */
 export const InstructionInjectedSchema = z.object({
@@ -1012,6 +1037,7 @@ export const InboundEventSchema = z.discriminatedUnion('type', [
   AgentIdleSchema,           // [v0.15] Worker 回合结束
   CompletionStatusSchema,    // legacy CompletionEvent 状态占位
   CompletionViewV1Schema,    // [v1.0.13] 原子用户结果投影
+  AgentProfileUpdatedSchema, // [v1.0.38.2] 成员改名/换头像（跨项目全局，事件广播）
     // 项目/生命周期
   ProjectCreatedSchema,
   RecoveryNoticeSchema,
@@ -1130,6 +1156,20 @@ export const AddAgentsCmdSchema = z.object({
 export type AddAgentsCmd = z.infer<typeof AddAgentsCmdSchema>;
 
 /**
+ * [v1.0.38.2] 改名 / 换头像（跨项目全局生效）
+ *
+ * agent_id：目标成员。name / avatar 至少提供一个；传空串 = 还原（回默认）。
+ * role 不可改（用户底线）——本指令不接受 role 字段。
+ */
+export const UpdateAgentProfileCmdSchema = z.object({
+  type: z.literal('update_agent_profile'),
+  agent_id: z.string(),
+  name: z.string().optional(),
+  avatar: z.string().optional(),
+});
+export type UpdateAgentProfileCmd = z.infer<typeof UpdateAgentProfileCmdSchema>;
+
+/**
  * 请求事件回放
  *
  * project_id 必填（= 当前活跃项目，无项目时 'demo'）
@@ -1212,6 +1252,7 @@ export const OutboundCommandSchema = z.discriminatedUnion('type', [
   FeedbackInstructionCmdSchema,
   CreateProjectCmdSchema,
   AddAgentsCmdSchema,
+  UpdateAgentProfileCmdSchema,   // [v1.0.38.2] 改名/换头像
   ReplayRequestCmdSchema,
   RequestSnapshotCmdSchema,
   MarkReadCmdSchema,

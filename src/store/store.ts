@@ -532,6 +532,14 @@ export interface KnoweStore {
   notices: GlobalNotice[];
   projectOrder: string[];
 
+  /**
+   * [v1.0.38.2] 右键菜单「更改头像/用户名」的跨组件请求：ContextMenu 写入，
+   * ContactsView 的 AgentProfile 读到匹配的 agentId 就打开编辑面板并清掉。
+   * 一次性的立即请求，消费方负责清空；不清空也不影响后续使用（靠 ts 区分新的点击）。
+   */
+  contactProfileEditRequest: { projectId: string; agentId: string; ts: number } | null;
+
+
   // ── [v0.44.8] 群聊列表右键菜单（后端持久态 + 本窗口展开态） ──
   /** project_id → pinned_at；键存在即置顶，时间戳越大越靠上。 */
   pinnedProjects: Record<string, number>;
@@ -643,6 +651,8 @@ export interface KnoweStore {
   ) => void;
   /** [v1.0.23.4] 群聊中途添加 Agent 员工：roles 为职能前缀数组，可重复（同职能多选）。 */
   addAgents: (projectId: string, roles: string[]) => void;
+  /** [v1.0.38.2] 成员改名 / 换头像（跨项目全局生效）。name/avatar 至少传一项；空串 = 还原默认。 */
+  updateAgentProfile: (projectId: string, agentId: string, attrs: { name?: string; avatar?: string }) => void;
 
   // ── Actions: 草稿（[v0.7 #1] 草稿归会话，不归输入框） ──
   setDraft: (projectId: string, text: string) => void;
@@ -670,6 +680,12 @@ export interface KnoweStore {
   // ── Actions: Lifecycle ──
   setSocket: (s: SocketAPI) => void;
   setView: (name: string) => void;
+
+  /** [v1.0.38.2] 请求联系人资料页自动打开编辑面板（由右键菜单写入、ContactsView 消费）。 */
+  requestContactProfileEdit: (projectId: string, agentId: string) => void;
+  /** [v1.0.38.2] 消费方处理完请求后清空，避免重复触发。 */
+  clearContactProfileEdit: () => void;
+
   toggleCmdK: () => void;
   closeCmdK: () => void;
 
@@ -757,6 +773,7 @@ export const useKnoweStore = create<KnoweStore>()(
     conn: 'closed' as ConnStatus,
     notices: [],
     projectOrder: [],
+    contactProfileEditRequest: null,
     pinnedProjects: {},
     mutedProjects: {},
     foldedProjects: {},
@@ -1349,7 +1366,8 @@ export const useKnoweStore = create<KnoweStore>()(
             //   前端不再自己掷骰子（那是「昨天叫林知远、今天叫陈思涵」的根）。
             // [v0.9d] 第八个参数 active=true：这份名单**就是后端此刻的花名册**，
             //   名单里的人一律算在队（归档的人后端根本不会发过来）。
-            registerMember(conv, m.id, agents, roleTypes, m.role, m.name, true);
+            registerMember(conv, m.id, agents, roleTypes, m.role, m.name, true,
+                           (m as { avatar?: string }).avatar);
           }
           // 若 DM 事件比所属群握手更早到，它只能先退回 agentId；花名册现在齐了，
           // 立即把这些既有私聊的名字/头像升级成群内权威显示值。
@@ -1621,6 +1639,21 @@ export const useKnoweStore = create<KnoweStore>()(
       socket.addAgents(projectId, roles);
     },
 
+    /**
+     * [v1.0.38] 成员改名 / 换头像（按项目隔离生效）。
+     * 委托给 socket.updateAgentProfile → update_agent_profile 出站命令。
+     * 广播回来的 agent_profile_updated 事件会刷新本项目 display（state.ts 前置拦截处理）。
+     */
+    updateAgentProfile(projectId: string, agentId: string, attrs: { name?: string; avatar?: string }): void {
+      if (!agentId) return;
+      const socket = get()._socket;
+      if (!socket) {
+        console.warn('[store] updateAgentProfile: no socket');
+        return;
+      }
+      socket.updateAgentProfile(projectId, agentId, attrs);
+    },
+
     // ── Actions: 草稿 ──
 
     setDraft(projectId: string, text: string): void {
@@ -1774,6 +1807,18 @@ export const useKnoweStore = create<KnoweStore>()(
 
     setView(name: string): void {
       set((draft) => { draft.activeView = name; });
+    },
+
+    // [v1.0.38.2] 右键菜单「更改头像/用户名」→ 一次性编辑请求（ContactsView 消费后清空）。
+    requestContactProfileEdit(projectId: string, agentId: string): void {
+      if (!projectId || !agentId) return;
+      set((draft) => {
+        draft.contactProfileEditRequest = { projectId, agentId, ts: Date.now() };
+      });
+    },
+
+    clearContactProfileEdit(): void {
+      set((draft) => { draft.contactProfileEditRequest = null; });
     },
 
     toggleCmdK(): void {

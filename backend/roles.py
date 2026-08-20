@@ -326,9 +326,105 @@ def identity_block(agent_id: str, role: str) -> str:
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+# [v1.0.38.2] 助手化称呼 + 职责描述
+#
+# PRD §2.2 的 24 个「xx助手」称呼 + 「能帮你…」职责描述（用户逐字审定）。
+# 键 = 角色前缀 = KNOWN_ROLES 的键（与 ROLE_PROFILES 一致）。
+# 中文真源在这里；en 走 locales/ roles.profiles.<prefix>.assistant_* 覆盖，
+# 查不到回退这里的中文（与 _localized 同机制）。
+# ═══════════════════════════════════════════════════════════════
+ASSISTANT_PROFILES: dict[str, dict[str, str]] = {
+    "fe":     {"name": "界面设计助手", "desc": "把网页/应用/App的页面做出来，做出好看又好用的界面"},
+    "be":     {"name": "编程后端助手", "desc": "写服务器和接口，让数据能存、能读、能对接"},
+    "pm":     {"name": "产品设计助手", "desc": "把你想做的产品、模糊的想法梳理成清楚的需求和待办清单"},
+    "qa":     {"name": "bug测试助手", "desc": "帮你试功能、找 bug、验收成果做得好不好"},
+    "ux":     {"name": "美工设计助手", "desc": "做平面设计、界面视觉、交互流程，让图形好看"},
+    "da":     {"name": "数据分析助手", "desc": "整理数据、算指标、做图表、给你结论"},
+    "db":     {"name": "数据库维护助手", "desc": "设计、维护数据库，优化查询、备份恢复"},
+    "devops": {"name": "部署上线助手", "desc": "把东西传到云仓库、部署环境、安装依赖、把项目上线"},
+    "sec":    {"name": "漏洞审查助手", "desc": "查代码和系统的深层次漏洞（不是单纯测bug）、查权限风险"},
+    "ml":     {"name": "机器学习助手", "desc": "帮你研究LLM模型、训练、调提示词、检索研究"},
+    "mobile": {"name": "手机端开发助手", "desc": "做iOS/安卓手机应用，适配各种手机平台"},
+    "game":   {"name": "游戏制作助手", "desc": "做游戏玩法、关卡、平衡设计"},
+    "arch":   {"name": "架构设计助手", "desc": "设计软件后台架构、系统结构、帮你做技术选型"},
+    "gis":    {"name": "GIS助手", "desc": "处理地图和空间数据、做地理分析可视化"},
+    "media":  {"name": "视频音频助手", "desc": "处理音频视频、剪辑、压字幕、转格式"},
+    "sre":    {"name": "系统运维助手", "desc": "监控系统、排查故障、保障系统稳定不宕机"},
+    "sup":    {"name": "技术答疑助手", "desc": "排查问题、解答疑问、整理常见问题"},
+    "writer": {"name": "文档撰写助手", "desc": "写文档、教程、README、发布说明"},
+    "fin":    {"name": "财务分析助手", "desc": "做财务模型、预测、算成本和估值"},
+    "hc":     {"name": "医疗信息助手", "desc": "查阅医学文献、整理医学证据、解读健康数据、提出医学建议"},
+    "edu":    {"name": "学术研究助手", "desc": "通用型学术助手，查文献、做研究、整理学习研究方法等"},
+    "legal":  {"name": "法务合规助手", "desc": "审合同条款、查合规、看开源许可等"},
+    "mkt":    {"name": "营销推广助手", "desc": "做增长方案、内容和渠道、竞品调研等"},
+    "ar":     {"name": "3D/VR/AR助手", "desc": "做 AR/VR/3D、空间交互体验"},
+}
+
+
+def assistant_profile(role: str) -> dict[str, str] | None:
+    """按角色前缀查「助手称呼 + 职责描述」；认前缀或中文 label，无 → None。"""
+    key = (role or "").strip()
+    if not key:
+        return None
+    prof = ASSISTANT_PROFILES.get(key)
+    if prof is not None:
+        return prof
+    # 认 label（外部可能传「前端」这种中文）
+    for prefix, p in ASSISTANT_PROFILES.items():
+        rp = ROLE_PROFILES.get(prefix)
+        if rp and rp.label == key:
+            return p
+    return None
+
+
+def _assistant_localized(role: str) -> dict[str, str]:
+    """语言化的助手称呼 + 描述（en 走 locales，缺省回退中文真源）。"""
+    prof = assistant_profile(role)
+    if prof is None:
+        return {}
+    prefix = role.split("_")[0] if role else ""
+    # 找真 source 前缀（外传可能是 label）
+    for p, d in ASSISTANT_PROFILES.items():
+        if d is prof or (ROLE_PROFILES.get(p) and ROLE_PROFILES[p].label == role):
+            prefix = p
+            break
+    name = msg(f"roles.profiles.{prefix}.assistant_name")
+    desc = msg(f"roles.profiles.{prefix}.assistant_desc")
+    if name.startswith("roles.profiles."):
+        name = prof["name"]
+    if desc.startswith("roles.profiles."):
+        desc = prof["desc"]
+    return {"name": name, "desc": desc}
+
+
+def assistant_name_for(role: str) -> str:
+    """「界面设计助手」这类助手称呼；查不到 → 空串（调用方自行兜底）。"""
+    return _assistant_localized(role).get("name", "")
+
+
+def assistant_desc_for(role: str) -> str:
+    """「能帮你…」职责描述；查不到 → 空串。"""
+    return _assistant_localized(role).get("desc", "")
+
+
+def assistant_identity_line(agent_id: str, role: str) -> str:
+    """成员自己「你是谁」的助手化一行（供 _identity_block 用，见 PRD §3）。"""
+    prof = assistant_profile(role)
+    if prof is None:
+        return ""
+    localized = _assistant_localized(role)
+    return f"{localized['name']}。{localized['desc']}"
+
+
 __all__ = [
     "ROLE_PROFILES",
     "RoleProfile",
+    "ASSISTANT_PROFILES",
+    "assistant_desc_for",
+    "assistant_identity_line",
+    "assistant_name_for",
+    "assistant_profile",
     "catalog_for_tool",
     "identity_block",
     "localized_label",

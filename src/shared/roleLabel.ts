@@ -42,6 +42,57 @@ export function roleLabel(role: string): string {
 }
 
 /**
+ * [v1.0.38.2] 助手化称呼表 —— 单一真源（与后端 backend/roles.py ASSISTANT_PROFILES 对齐）。
+ * key = 英文角色 key（Frontend/Backend/…），与 roles.* 同体系。
+ * value = PRD §2.2 用户审定的「xx助手」称呼（zh 基准）。en 界面如需英文助手名再扩展。
+ */
+const ASSISTANT_NAME_BY_KEY: Record<string, string> = {
+  Frontend: '界面设计助手',
+  Backend: '编程后端助手',
+  PM: '产品设计助手',
+  QA: 'bug测试助手',
+  Design: '美工设计助手',
+  Data: '数据分析助手',
+  Database: '数据库维护助手',
+  DevOps: '部署上线助手',
+  Security: '漏洞审查助手',
+  ML: '机器学习助手',
+  Mobile: '手机端开发助手',
+  Game: '游戏制作助手',
+  Architecture: '架构设计助手',
+  GIS: 'GIS助手',
+  Media: '视频音频助手',
+  SRE: '系统运维助手',
+  Support: '技术答疑助手',
+  Writer: '文档撰写助手',
+  Finance: '财务分析助手',
+  Healthcare: '医疗信息助手',
+  Academic: '学术研究助手',
+  Legal: '法务合规助手',
+  Marketing: '营销推广助手',
+  Spatial: '3D/VR/AR助手',
+};
+
+/** roleKey 归一：任意形式角色名 → 英文角色 key（Frontend/Backend/…）。查不到返回原值。 */
+function roleKeyOf(role: string): string {
+  if (!role) return role;
+  return ZH_ROLE_TO_KEY[role] ?? EN_ROLE_TO_KEY[role] ?? role;
+}
+
+/**
+ * [v1.0.38.2] 助手化角色名（PRD §2.2）：「界面设计助手」这类。
+ * 有助手称呼 → 用它；没有（coordinator/未知）→ 回退 roleLabel。
+ * 需要「职位人话化」的展示点（消息气泡/联系人/托盘）建议用它。
+ */
+export function assistantRoleLabel(role: string): string {
+  if (!role) return role;
+  const key = roleKeyOf(role);
+  const an = ASSISTANT_NAME_BY_KEY[key];
+  if (an) return an;
+  return roleLabel(role);
+}
+
+/**
  * memberNameLabel — 成员显示名。
  *
  *   · coordinator 的名字本质是角色名（「项目经理」/「Leader」），后端下发的是

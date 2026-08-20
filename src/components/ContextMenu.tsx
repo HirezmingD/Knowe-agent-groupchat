@@ -595,6 +595,20 @@ export function openContactAgentMenu(
       label: i18n.t('context.menu.29'),
       onClick: () => openAgentRecords(projectId, agentId, false),
     },
+    {
+      icon: <IconEdit />,
+      label: i18n.t('context.menu.changeProfile'),
+      onClick: () => {
+        const st = useKnoweStore.getState();
+        st.setView('contacts');
+        st.requestContactProfileEdit(projectId, agentId);
+        // 与「查看资料」同一通道：让 ContactsView 选中并展开该 agent 的资料页，
+        // requestContactProfileEdit 字段接着被 AgentProfile 消费 → 自动打开编辑面板。
+        window.dispatchEvent(new CustomEvent('knowe:focus-contact', {
+          detail: { projectId, agentId },
+        }));
+      },
+    },
     '---',
     {
       icon: <IconTrash />,
@@ -671,6 +685,20 @@ export function openAgentMenu(projectId: string, agentId: string, x: number, y: 
       },
     },
     ...common,
+    {
+      icon: <IconEdit />,
+      label: i18n.t('context.menu.changeProfile'),
+      onClick: () => {
+        const st = useKnoweStore.getState();
+        st.setView('contacts');
+        st.requestContactProfileEdit(contextId, agentId);
+        // 与「查看资料」同一通道（Event → App.onFocusContact → ContactsView.setSelected），
+        // requestContactProfileEdit 字段接着被 AgentProfile 消费 → 自动打开编辑面板。
+        window.dispatchEvent(new CustomEvent('knowe:focus-contact', {
+          detail: { projectId: contextId, agentId },
+        }));
+      },
+    },
     '---',
     {
       icon: <IconAgentReport />,

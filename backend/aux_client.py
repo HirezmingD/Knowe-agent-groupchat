@@ -41,9 +41,13 @@ async def chat(
     temperature: float | None = None,
     timeout_s: float = 40.0,
     what: str = "辅助模型",
+    transport: str = "openai_chat",
 ) -> str:
     """
-    打一次 /chat/completions，把文本拿回来。失败一律 ToolError（中文人话）。
+    打一次对话补全，把文本拿回来。失败一律 ToolError（中文人话）。
+
+    ``transport`` 决定协议：openai_chat/codex_responses 走 ``/chat/completions``；
+    anthropic_messages 走 ``/v1/messages``（x-api-key + anthropic-version）。
     """
     if not api_key:
         raise ToolError(f"{what}需要配置 API key（环境变量 DEEPSEEK_API_KEY 或对应的专用变量）")
@@ -56,32 +60,51 @@ async def chat(
             f"{what}还没有可用的接入点（base_url 为空）——请到「设置 → 模型与提供方」"
             f"配置主模型（辅助模型默认跟随主模型的服务商）。"
         )
-    url = base_url.rstrip("/") + "/chat/completions"
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-    }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-    if temperature is not None:
-        payload["temperature"] = temperature
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "User-Agent": _UA,
-    }
+
+    is_anthropic = (transport or "openai_chat") == "anthropic_messages"
+    if is_anthropic:
+        from knowe_core.anthropic_codec import (
+            build_headers as _anth_headers,
+            encode_request as _anth_encode,
+            resolve_endpoint as _anth_endpoint,
+        )
+
+        url = _anth_endpoint(base_url)
+        payload = _anth_encode(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        headers = _anth_headers(api_key)
+        headers["User-Agent"] = _UA
+    else:
+        url = base_url.rstrip("/") + "/chat/completions"
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": _UA,
+        }
 
     try:
         import httpx
     except ImportError:
-        return _parse(await _urllib_post(url, payload, headers, timeout_s), what, model)
+        return _parse_aux(await _urllib_post(url, payload, headers, timeout_s), what, model, is_anthropic)
 
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as cli:
             r = await cli.post(url, headers=headers, json=payload)
             if r.status_code >= 400:
                 raise ToolError(_http_hint(r.status_code, r.text, what, model))
-            return _parse(r.json(), what, model)
+            return _parse_aux(r.json(), what, model, is_anthropic)
     except ToolError:
         raise
     except Exception as exc:                       # httpx.TimeoutException / ConnectError / …
@@ -109,8 +132,21 @@ async def _urllib_post(url: str, payload: dict[str, Any], headers: dict[str, str
     return await asyncio.to_thread(_post)
 
 
-def _parse(data: dict[str, Any], what: str, model: str) -> str:
+def _parse_aux(data: dict[str, Any], what: str, model: str, is_anthropic: bool = False) -> str:
     try:
+        if is_anthropic:
+            # anthropic 响应：content 是 blocks 列表，取 text 块拼起来
+            parts: list[str] = []
+            for block in data.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(str(block.get("text") or ""))
+            text = "".join(parts)
+            if not text and isinstance(data.get("content") or [], list) and data.get("content"):
+                # 可能是 tool_use 或无 text 的响应——不猜，交给上层
+                text = ""
+            if text == "" and not data.get("content"):
+                raise KeyError("no content")
+            return (text or "").strip()
         text = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
         raise ToolError(f"{what}返回了看不懂的结构：{str(data)[:200]}") from None

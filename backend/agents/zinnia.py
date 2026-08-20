@@ -543,19 +543,19 @@ class ZinniaAgent:
         return payload
 
     # ── [v0.44.3 场景1] 模型绑定：每回合现取（设置面板是唯一权威） ──
-
-    _OPENAI_COMPAT = ("openai_chat", "codex_responses")
+    # [v1.0.38 B] 知知开放 anthropic——用户配什么模型就能用什么（共进退，不因协议绕开）。
+    # ProviderClient 已支持 anthropic_messages 传输，知知主模型为 anthropic 时直接用。
+    _OPENAI_COMPAT = ("openai_chat", "codex_responses", "anthropic_messages")
 
     def _resolve_binding(self) -> bool:
         """
         解析知知这一回合该用的模型，写入 self.api_key/model/base_url。
 
-        解析顺序（知知通过共享 ProviderClient 使用 OpenAI 兼容协议）：
-          ① 知知的个性化绑定（"__platform__::zinnia"，通常没有） > 全局主模型
-             ——但仅当 transport 是 OpenAI 兼容（openai_chat / codex_responses）；
-          ② 主模型是 Anthropic 协议时 → 退而用辅助模型（若它是 OpenAI 兼容）；
-          ③ 都不行 → 遗留 .env（DEEPSEEK_*，齐全才算）；
-          ④ 还不行 → False + self._binding_issue 说明该怎么配。
+        解析顺序（知知通过共享 ProviderClient 使用统一的 transport 传输，含 anthropic）：
+         ① 知知的个性化绑定（"__platform__::zinnia"，通常没有） > 全局主模型
+            ——transport 只要受支持（openai_chat / codex_responses / anthropic_messages）即可；
+         ② 都不行 → 遗留 .env（DEEPSEEK_*，齐全才算）；
+         ③ 还不行 → False + self._binding_issue 说明该怎么配。
 
         返回 True = 绑定可用。
         """

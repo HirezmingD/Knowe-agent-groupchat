@@ -78,12 +78,21 @@ class ProviderModelAdapter:
         if base_url:
             from knowe_core.provider_client import ProviderClient
 
+            # 从 source 携带 transport（ProviderConfig 或 source 本身上）：legacy 重建
+            # 分支也必须保持协议一致，否则 anthropic 主模型会退化成 openai 传输而打错端点。
+            provider_cfg = getattr(source, "_provider_cfg", None)
+            cfg_transport = (
+                getattr(provider_cfg, "transport", "") if provider_cfg is not None else ""
+            )
+            src_transport = getattr(source, "transport", "") or ""
+            transport = (cfg_transport or src_transport) or "openai_chat"
             return cls(
                 ProviderClient(
                     base_url=base_url,
                     api_key=str(getattr(source, "api_key", "") or ""),
                     model=str(getattr(source, "model", "") or ""),
                     client_factory=getattr(source, "_client_factory", None),
+                    transport=transport,
                 ),
                 **kwargs,
             )

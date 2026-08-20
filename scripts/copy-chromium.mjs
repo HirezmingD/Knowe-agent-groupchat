@@ -2,7 +2,7 @@
 /**
  * copy-chromium.mjs — 把 headless_shell 内核拷入 PyInstaller 产物（阶段二 2.3）
  *
- * 背景（对应 00-审计与架构报告 v2 第 7 节，和洲已拍板带 headless_shell）：
+ * 背景（对应 00-审计与架构报告 v2 第 7 节，用户已拍板带 headless_shell）：
  *   - main.ts:629 打包版注入 PLAYWRIGHT_BROWSERS_PATH = resources/backend/ms-playwright
  *   - electron-builder extraResources 把 dist/KnoweBackend/ 整体拷为 resources/backend/
  *   - 所以把内核拷到 dist/KnoweBackend/ms-playwright/ 即可随包到位

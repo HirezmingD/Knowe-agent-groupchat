@@ -10,6 +10,42 @@ Version line: **v0.1 (prototype) → v0.2 (React rewrite) → v1.0 (productizati
 
 ## v1.0.x — Productization
 
+### v1.0.38 (2026-08-20)
+
+**Anthropic protocol compatibility (core)**
+- ProviderClient adds an `anthropic_messages` transport: one interface auto-adapts to OpenAI / Anthropic protocols
+- New `knowe_core/anthropic_codec.py` codec: `/v1/messages` endpoint, `x-api-key` auth, OpenAI↔Anthropic request/response/stream translation (thinking, tool_use, index-tracked input_json_delta)
+- Transport threaded through the whole engine: PM / worker / 知知 / aux all use the transport layer — configure whichever provider, thinking left to the provider (connectivity is what matters)
+- Fixed `model_adapter.from_legacy` losing transport plus an `or` short-circuit bug, preventing an anthropic primary model from silently reverting to the openai transport
+- Added `tests/test_anthropic_codec.py`, `tests/test_provider_anthropic_integration.py` (22 + 5 passed), zero new regressions
+
+**Member name & avatar (core)**
+- New **project-scoped** identity store `identity_store.py`: renaming a member / changing an avatar in one group affects only that group — same-role members in other groups are no longer contaminated
+- Dropped the old global table (keyed by agent_id) that caused cross-group name/avatar leaks; legacy data auto-cleaned
+- Renamed / re-avatared members survive restart (4 restart breakpoints fixed: backend custom-name delivery, frontend schema avatar, registerMember consumption, history replay not overwriting the authoritative name)
+- PM is notified with the freshest roster on rename — no longer answers from stale history
+
+**「xx助手」assistant titles & role descriptions (core)**
+- 24 positions get assistant titles + descriptions table (reviewed word-by-word by 用户): UI/UX→美工设计助手, Frontend→界面设计助手, GIS→GIS助手, etc.
+- Unified backend `_display_role` outlet: worker self-intro, PM team roster, member roster, approval cards all use the new「xx助手」naming — old functional labels no longer coexist
+- Frontend `assistantRoleLabel` mapping unified; roster panel (RosterPanel) uses the new table
+
+**Common UI fixes**
+- Group-build / add-member card roles show assistant titles; edit button enlarged and inline with the name
+- Chat-avatar right-click menu gains the correct「Change name/avatar」entry; edit panel confirms on Enter, layered shading (all from var() tokens)
+- Role descriptions de-duplicated and aligned verbatim with the PRD table; PM avatar in the group grid no longer degrades to a text glyph
+
+**Settings → About copy**
+- Update source note:「自动链接官网更新」→「自动链接Github Release仓库更新，链接可能不稳定」
+- Website marked「网站备案中，尚未上线」; website link display and address unified to knowe-agent.online
+- Author's note adds a long-term-maintenance statement, contact email and author WeChat (join the beta user group)
+
+**Official name changed to「Knowe 知知智能体」**
+- Window title, tray, installer product name, About page, first-run page and sidebar logo unified to「Knowe知知智能体」
+- Internal identifiers (bundle id com.knowe.app, process names, HTTP headers, domain, code identifiers) unchanged
+
+Version bumped to 1.0.38
+
 ### v1.0.37 (2026-08-18)
 
 **Prompt & workflow optimization (core)**

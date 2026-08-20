@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DEFAULT_ROLE_TYPES } from '../store/state';
+import { assistantRoleLabel } from '../shared/roleLabel';
 import './role-picker.css';
 
 /**
@@ -113,7 +114,7 @@ export const RolePicker: React.FC<RolePickerProps> = ({
                 onClick={() => toggle(r.type)}
               >
                 <span className="pick-check" aria-hidden="true">{CHECK_SVG}</span>
-                <span className="role-name">{t(`roles.${ROLE_KEY_BY_TYPE[r.type]}`)}</span>
+                <span className="role-name">{assistantRoleLabel(ROLE_KEY_BY_TYPE[r.type] ?? r.type)}</span>
               </button>
             );
           })}

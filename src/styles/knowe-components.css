@@ -1036,6 +1036,44 @@ html.dark .temp-slider::-webkit-slider-thumb {box-shadow:var(--shadow-1),0 0 0 1
 .pf-top > .avatar {width:64px;height:64px;font-size:22px}
 .pf-top > .avatar img {width:100%;height:100%;border-radius:50%;object-fit:cover}
 
+/* ── [v1.0.38.2] 编辑资料入口 + 编辑态（改名/换头像/保存/取消）──
+   全部用 design tokens var()，不写死色值；风格对齐上方 .pf-* / .test-btn。
+   [v1.0.38.3] 编辑按钮放大、紧跟名字后面（不再右上角）；编辑面板用不同深浅
+   颜色区分「输入凹槽 / 按钮凸起」，层次分明。 */
+.pf-nm-row {display:flex;align-items:center;gap:var(--space-2)}
+.pf-edit {display:flex;align-items:center;justify-content:center;
+  width:32px;height:32px;flex-shrink:0;
+  border-radius:var(--r-sm);color:var(--ink-3);cursor:pointer;
+  transition:color var(--dur-micro),background var(--dur-micro)}
+.pf-edit:hover {color:var(--accent);background:var(--surface-2)}
+
+.pf-edit-panel {margin-bottom:var(--space-8);padding:var(--space-5);
+  background:var(--surface-sunken);
+  border:1px solid var(--hairline);border-radius:var(--r-md);
+  display:flex;flex-direction:column;gap:var(--space-4)}
+.pf-edit-row {display:flex;align-items:center;gap:var(--space-4)}
+.pf-edit-row > label {width:64px;flex-shrink:0;font-size:13px;color:var(--ink-2)}
+.pf-edit-input {flex:1;height:34px;
+  background:color-mix(in srgb, var(--surface-sunken) 100%, var(--ink) 6%);
+  border:1px solid var(--hairline);
+  border-radius:var(--r-sm);padding:0 var(--space-3);font-size:13px;color:var(--ink)}
+.pf-edit-input:focus {outline:none;box-shadow:0 0 0 2px var(--accent-ring)}
+.pf-edit-avatar {flex:1;display:flex;align-items:center;gap:var(--space-3)}
+.pf-edit-choose {height:32px;padding:0 var(--space-4);border-radius:var(--r-sm);
+  background:var(--surface-raise);color:var(--accent);font-size:13px;font-weight:500;
+  border:1px solid var(--hairline);cursor:pointer;transition:background var(--dur-micro)}
+.pf-edit-choose:hover {background:var(--surface)}
+.pf-edit-preview {width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0}
+.pf-edit-actions {display:flex;justify-content:flex-end;gap:var(--space-3)}
+.pf-edit-save {height:32px;padding:0 var(--space-5);border-radius:var(--r-sm);
+  background:var(--accent);color:var(--surface);font-size:13px;font-weight:500;cursor:pointer;
+  transition:background var(--dur-micro)}
+.pf-edit-save:hover {background:var(--accent-hover)}
+.pf-edit-cancel {height:32px;padding:0 var(--space-4);border-radius:var(--r-sm);
+  background:var(--surface-2);color:var(--ink-2);font-size:13px;font-weight:500;cursor:pointer;
+  transition:background var(--dur-micro)}
+.pf-edit-cancel:hover {background:var(--surface-sunken)}
+
 /* === SettingsPane · 设置面板 · ?.set-pane === */
 .set-pane {flex:1;overflow-y:auto;padding:var(--space-8) var(--space-10)}
 .set-pane h2 {font-size:22px;font-weight:600;letter-spacing:-.01em;margin-bottom:var(--space-6)}
@@ -1279,7 +1317,7 @@ html.dark .scrim {background:rgba(0,0,0,0.35)}
 
 /* ══════════════════════════════════════════════════════════════
    R5 · 产品 UI 新增件（设计稿之外，只用既有令牌，不改设计稿任何规则）
-   —— 新增理由写在各组件文件头：和洲不是开发者，这些状态必须看得见。
+   —— 新增理由写在各组件文件头：用户不是开发者，这些状态必须看得见。
    ══════════════════════════════════════════════════════════════ */
 
 /* ── ConnBadge：标题栏右侧的连接状态徽章（六态） ── */
@@ -2073,7 +2111,7 @@ html.dark .md pre code .ln {
 
 /* 当前所在群的头像条：置顶 + 高亮，一眼看出「你在这个群的私聊空间里」。
    （.citem.pinned 与 .citem.active 都改 background，靠这条更高特异度的规则钉死为高亮态。
-   [v1.0.23.6] 移除左侧 3px accent 竖条——和洲反馈「很丑」，选中感由背景高亮承担。） */
+   [v1.0.23.6] 移除左侧 3px accent 竖条——用户反馈「很丑」，选中感由背景高亮承担。） */
 .dm-panel > .citem.pinned.active { background: var(--accent-tint); }
 
 /* 成员列表：相对群头像整体左缩进约半个头像（≈22px），左侧一条浅引导线，

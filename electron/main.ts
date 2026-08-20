@@ -62,7 +62,7 @@ import {
 } from './updater';
 
 // ═══════════════════════════════════════════════════════════════
-// [调试铁律·和洲拍板] 每次启动必带远程调试（不依赖环境变量，固化进主进程）
+// [调试铁律·用户拍板] 每次启动必带远程调试（不依赖环境变量，固化进主进程）
 //   地址：http://127.0.0.1:9222/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/<id>
 //   target id 每次重启会变，curl http://127.0.0.1:9222/json 取最新。
 //   两个开关必须成对：只有端口没有 Origin 放行时，浏览器 DevTools 的 ws 会被 403 拒 → 永远 disconnected。
@@ -1062,7 +1062,7 @@ function createTray(): void {
 
   const icon = nativeImage.createFromPath(APP_ICON);
   tray = new Tray(icon);
-  tray.setToolTip('Knowe');
+  tray.setToolTip('Knowe知知智能体');
 
   const menu = Menu.buildFromTemplate([
     { label: '显示 Knowe', click: () => showMainWindow() },
@@ -1761,7 +1761,7 @@ function createWindow(): void {
     //   渲染端据此不再自绘右侧 .traffic（见 App.tsx 的 IS_MAC 分支）。
     frame: false,
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
-    title: 'Knowe',
+    title: 'Knowe知知智能体',
     // APP 窗口/任务栏图标：public/brand/app-icon.png（由 fix-assets 脚本从 Knowe图标2.png 复制而来）
     icon: join(PROJECT_ROOT, 'public', 'brand', 'app-icon.png'),
     webPreferences: {

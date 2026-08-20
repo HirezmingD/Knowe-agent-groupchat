@@ -536,6 +536,8 @@ class DeepSeekAgent:
             ),
             max_retries=CONFIG.provider_max_retries,
             client_factory=self._client_factory,
+            # 老 DEEPSEEK_* 单 agent 路径恒走 OpenAI 兼容（非 harness 主路径，默认 fake）
+            transport="openai_chat",
         )
 
         deltas: list[str] = []

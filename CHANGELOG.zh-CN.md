@@ -10,6 +10,42 @@
 
 ## v1.0.x — 产品化阶段
 
+### v1.0.38（2026-08-20）
+
+**Anthropic 协议兼容（核心）**
+- ProviderClient 新增 `anthropic_messages` 传输层：一套接口，OpenAI / Anthropic 协议自适应
+- 新增 `knowe_core/anthropic_codec.py` 编解码模块：`/v1/messages` 端点、`x-api-key` 鉴权、OpenAI↔Anthropic 请求/响应/流式互转（support thinking、tool_use、带 index 的 input_json_delta）
+- 引擎全线透传 transport：PM / worker / 知知 / aux 全走传输层，用户配什么用什么（共进退），thinking 不管（能连即可）
+- 修复 `model_adapter.from_legacy` 丢 transport 与 `or` 短路 bug，防止 anthropic 主模型退化回 openai 传输
+- 新增 `tests/test_anthropic_codec.py`、`tests/test_provider_anthropic_integration.py`（22 + 5 passed），产出零新增回归
+
+**成员姓名与头像（核心）**
+- 新增按**项目隔离**的成员身份表 `identity_store.py`：改某个群的成员名/头像只在该群生效，全局同职位成员不再被污染
+- 放弃旧全局表（agent_id 单键）导致的跨群串名/串头像问题；旧数据自动清理
+- 成员改名 / 换头像后重启保持（补齐 4 个重启断点：后端下发自定义名、前端 schema 收 avatar、registerMember 消费、重放历史不覆盖权威名）
+- 项目经理在改名后自动收到最新花名册，不再凭历史旧名答人
+
+**「xx助手」称呼与职责描述（核心）**
+- 24 个职位助手化称呼 + 职责描述表（用户逐字审定）：UI/UX→美工设计助手、前端→界面设计助手、地理信息→GIS助手 等
+- 后端 `_display_role` 统一出口：worker 自我介绍、PM 团队名单、花名册、审批卡全部改用新提法「xx助手」，不再并存旧职能标签
+- 前端 `assistantRoleLabel` 统一映射，花名册（RosterPanel）改用新表
+
+**常见 UI 问题修复**
+- 建群/加人卡片角色名改助手称呼；编辑按钮放大并入名字同行
+- 群聊头像右键菜单补上「更改头像/用户名」正确入口；编辑面板回车确认、层次分浓淡（全 var() 令牌）
+- 职责描述防重复、与 PRD 表逐字对齐；群头像宫格 PM 图片不退化文字
+
+**设置-关于页文案**
+- 更新来源标注：「自动链接官网更新」→「自动链接Github Release仓库更新，链接可能不稳定」
+- 官网标注「网站备案中，尚未上线」；官网链接显示与地址统一为 knowe-agent.online
+- 作者的话补充长期维护声明、联系邮箱与作者微信（进内测用户群）
+
+**软件正式名更名为「Knowe 知知智能体」**
+- 窗口标题、托盘、安装包正式名（productName）、关于页、首启页、侧栏 logo 统一为「Knowe知知智能体」
+- 内部标识符（包名 com.knowe.app、进程名、HTTP 头、域名、代码标识）保持不变
+
+版本号升至 1.0.38
+
 ### v1.0.37（2026-08-18）
 
 **提示词与工作流优化（核心）**

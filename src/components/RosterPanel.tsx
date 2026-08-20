@@ -22,7 +22,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useKnoweStore } from '../store/store';
-import { roleLabel, memberNameLabel } from '../shared/roleLabel';
+import { assistantRoleLabel, memberNameLabel } from '../shared/roleLabel';
 import { selectIsPlatform, selectActiveProjectId } from '../store/selectors';
 import { selectActiveMembers } from '../store/selectors';
 import { Avatar } from './Avatar';
@@ -201,7 +201,7 @@ export const RosterPanel: React.FC<RosterPanelProps> = ({ open, onClose }) => {
                   : t('roster.panel.doubleClickDm', { name: m.display.name })}
               >
                 <div className="r-name">{memberNameLabel(m.id, m.display.name)}</div>
-                <div className="r-role">{roleLabel(m.display.role)}</div>
+                <div className="r-role">{assistantRoleLabel(m.display.role)}</div>
               </div>
               {/*
                 * [v0.30 Bug1] ★ 右侧状态区改成**一根竖列**（.r-side）：
@@ -272,7 +272,7 @@ export const RosterPanel: React.FC<RosterPanelProps> = ({ open, onClose }) => {
                   </div>
                   <div className="r-body">
                     <div className="r-name">{memberNameLabel(m.id, m.display.name)}</div>
-                    <div className="r-role">{roleLabel(m.display.role)}</div>
+                    <div className="r-role">{assistantRoleLabel(m.display.role)}</div>
                   </div>
                   {/* [v0.30 Bug1] 和在册行同一副骨架（.r-side），两组行的状态列才对得齐 */}
                   <div className="r-side">

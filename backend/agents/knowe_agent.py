@@ -128,12 +128,14 @@ class ProviderConfig:
         read_timeout_s: float | None = None,
         write_timeout_s: float | None = None,
         pool_timeout_s: float | None = None,
+        transport: str = "openai_chat",
     ) -> None:
         self.provider = provider
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
         self.temperature = temperature
+        self.transport = transport or "openai_chat"
         self.max_retries = (
             max(0, int(CONFIG.provider_max_retries))
             if max_retries is None else max(0, int(max_retries))
@@ -194,6 +196,7 @@ class KnoweAgent:
             max_retries=cfg.max_retries,
             client_factory=client_factory,
             provider=cfg.provider,
+            transport=cfg.transport,
         )
         self._tool_registry = tool_registry or ToolRegistry()
         # Only the Coordinator uses durable raw AgentLoop messages. Worker state is

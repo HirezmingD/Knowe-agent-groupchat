@@ -19,7 +19,7 @@ import { useKnoweStore } from '../store/store';
 import { useSettingsStore } from '../store/settings';
 import { selectProjectList, selectActiveProjectId, orderRosterMembers, type WorkingAgentSummary } from '../store/selectors';
 import { Avatar, AvatarGrid, palOf, glyphOf, type GridMember } from './Avatar';
-import { PLATFORM_PROJECT_ID, ZINNIA_AVATAR, getZinniaDisplayName } from '../store/avatar';
+import { PLATFORM_PROJECT_ID, ZINNIA_AVATAR, getZinniaDisplayName, faceFor } from '../store/avatar';
 import { isPrivateChat, isAgentDm, dmGroupOf, dmAgentOf } from '../store/chat';
 import type { Member } from '../store/state';
 import { useDirectoryPending } from '../store/directoryRecovery';
@@ -131,7 +131,7 @@ export const ConvList: React.FC<ConvListProps> = ({
         <div className="wordmark">
           <img
             src={appearance === 'dark' ? './brand/knowe-logo-v4-dark.png' : './brand/knowe-logo-v4.png'}
-            alt="Knowe"
+            alt="Knowe知知智能体"
           />
         </div>
         <button
@@ -405,7 +405,10 @@ export const ConvListItem: React.FC<ConvListItemProps> = ({
         id: m.id,
         glyph: m.display.glyph,
         pal: m.display.pal,
-        avatarUrl: m.display.avatarUrl,
+        // [v1.0.38.2-fix] display.avatarUrl 缺自定义时兜底 faceFor（项目经理默认走
+        //   Coordinator 头像池、成员走派生脸），否则没自定义头像的 PM 在左栏宫格
+        //   一直显示文字字形。口径与 ContactsView.memberFace 一致。
+        avatarUrl: m.display.avatarUrl ?? faceFor(m.id, id, s.convs[id]?.projectName).avatarUrl,
       }));
   }, shallow);
   const pending = useKnoweStore(

@@ -538,6 +538,12 @@ export function registerMember(
    *         不代表他现在回来了。
    */
   active = false,
+  /**
+   * [v1.0.38.2] 后端下发的全局自定义头像（project_created / agents_created.members
+   * 里的 avatar 字段，来自全局成员身份表）。有 → 覆盖 display.avatarUrl（跨项目全局生效）；
+   * 无 → 走 faceFor 兜底默认脸。让「重启后自定义头像不丢」。
+   */
+  avatar?: string,
 ): void {
   // [v1.0.23.2] 角色中文化：后端花名册可能下发英文 role（Frontend/Backend/Coordinator…），
   //   按 id 前缀映射回中文（与 DEFAULT_ROLE_TYPES 一致）——主界面/转发弹窗/花名册统一显示中文。
@@ -568,6 +574,10 @@ export function registerMember(
     if (name && existing.display.name !== name) {
       existing.display.name = name;
       existing.display.glyph = name[0] || existing.display.glyph;
+    }
+    // [v1.0.38.2] 后端下发的全局自定义头像：existing 成员也照样消费（重启后不丢）。
+    if (avatar && existing.display.avatarUrl !== avatar) {
+      existing.display.avatarUrl = avatar;
     }
     /*
      * ★★ [v0.9d Issue 2] **复活。** ★★
@@ -625,6 +635,8 @@ export function registerMember(
     if (role) display.role = role;
     if (name) display.name = name;
     display.glyph = display.name?.[0] || display.glyph;
+    // [v1.0.38.2] 后端下发的全局自定义头像优先（重启后不丢）；无则保留 606 行 faceFor 兜底默认脸
+    if (avatar) display.avatarUrl = avatar;
 
     c.members.push({
       id: agentId,
@@ -881,6 +893,28 @@ export function applyEvent(
       }
       if (removable.size) {
         c.members = (c.members || []).filter((m) => !removable.has(m.id));
+      }
+    }
+    return;
+  }
+
+  // ── [v1.0.38.2] agent_profile_updated：成员改名 / 换头像（跨项目全局）──
+  // 事件类型不在旧 InboundEvent 联合里，与 agents_rejected 同法前置接住。
+  if ((ev as { type?: string }).type === 'agent_profile_updated') {
+    const pid = (ev as { agent_id?: unknown }).agent_id;
+    if (typeof pid === 'string' && pid) {
+      const target = c.members.find((x) => x.id === pid);
+      if (target) {
+        const name = (ev as { name?: unknown }).name;
+        if (typeof name === 'string') {
+          // 空串 = 还原（回花名册名）；非空 = 用户自定义名
+          target.display.name = name || displayInfo(c, pid, agents, roleTypes).name || pid;
+        }
+        const avatar = (ev as { avatar?: unknown }).avatar;
+        if (typeof avatar === 'string') {
+          // 空串 = 还原（回前端派生脸）；非空 = 用户自定义头像（display.avatarUrl 优先消费）
+          target.display.avatarUrl = avatar || undefined;
+        }
       }
     }
     return;
@@ -1482,7 +1516,8 @@ export function applyEvent(
         // [v0.9c] name 是后端掷的（「林知远」），随事件一起来 —— 前端照单全收
         // [v0.9d] active=true：这是花名册事件 → 被归档的人会在这里**复活**
         registerMember(c, m.id, agents, roleTypes, m.role,
-                       (m as { name?: string }).name, true);
+                       (m as { name?: string }).name, true,
+                       (m as { avatar?: string }).avatar);
       }
       const names = members
         .map((a) => displayInfo(c, a.id, agents, roleTypes).name || a.id)
@@ -1602,6 +1637,10 @@ export function applyEvent(
       const authRuntime = new Map(c.members.map((m) => [m.id, {
         state: m.state, busySince: m.busySince, activeScopes: m.activeScopes,
       }]));
+      // [v1.0.38.2] 权威显示名同 status：project_created.members 是后端温载花名册的真源
+      //   （已叠全局自定义名/头像）。重放历史 agents_created 会拿**旧快照名**（如「Bluff」）
+      //   覆盖它 → 重放完后把重放前就在册的成员名复位回权威值。
+      const authName = new Map(c.members.map((m) => [m.id, m.display?.name]));
 
       const convEvents = (ev.conversation || []) as InboundEvent[];
       for (const ce of convEvents) {
@@ -1615,6 +1654,13 @@ export function applyEvent(
       for (const m of c.members) {
         const s = authStatus.get(m.id);
         if (s !== undefined) m.status = s;
+        // [v1.0.38.2] 名也复位：重放前就在册的成员，display.name 以权威来源
+        //   （project_created.members 已叠全局自定义名）为准，不被历史 agents_created 旧名覆盖。
+        const nm = authName.get(m.id);
+        if (nm !== undefined && m.display && m.display.name !== nm) {
+          m.display.name = nm;
+          if (m.display.glyph) m.display.glyph = (nm[0] || '');
+        }
         const runtime = authRuntime.get(m.id);
         if (runtime) {
           m.state = runtime.state;

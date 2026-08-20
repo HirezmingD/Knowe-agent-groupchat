@@ -28,7 +28,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
-import { roleLabel, memberNameLabel } from '../shared/roleLabel';
+import { assistantRoleLabel, memberNameLabel } from '../shared/roleLabel';
 import { IS_MAC } from '../shared/platform';
 import { createSocket, initWsAuthToken } from '../transport/socket';
 import { warmUpIncremental } from '../store/incrementalSync';   // [v1.0.23.6] 启动预热
@@ -369,7 +369,7 @@ export const App: React.FC = () => {
           if (last.kind === 'agent') {
             const m = c.members.find((x) => x.id === last.agentId);
             memberName = m ? memberNameLabel(m.id, m.display.name) : '';
-            memberRole = roleLabel(m?.display.role || '');
+            memberRole = assistantRoleLabel(m?.display.role || '');
             avatarUrl = m?.display.avatarUrl || '';
           } else if (last.kind === 'user') {
             memberName = '我';

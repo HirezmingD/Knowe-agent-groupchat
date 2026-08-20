@@ -1,7 +1,7 @@
 /**
  * batchA.test.tsx — 批次 A：ConnBadge / Rail / ConvList
  *
- * 每条测试都对应一个「和洲能在屏幕上看到」的事实。
+ * 每条测试都对应一个「用户能在屏幕上看到」的事实。
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

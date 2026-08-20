@@ -42,10 +42,10 @@
  *   ③ 不碰聊天区的任何状态：.view-chats 只是被 CSS 藏起，草稿、滚动位置都在。
  */
 
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
-import { roleLabel, memberNameLabel } from '../shared/roleLabel';
+import { roleLabel, memberNameLabel, assistantRoleLabel } from '../shared/roleLabel';
 import { useKnoweStore } from '../store/store';
 import type { Conv, Member } from '../store/state';
 import { Avatar, AvatarGrid, type GridMember } from './Avatar';
@@ -86,6 +86,8 @@ const IcReport: React.FC<IcProps> = ({ size = 20 }) => svg(size, (<><path d="M6 
 const IcUsers: React.FC<IcProps> = ({ size = 15 }) => svg(size, (<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></>));
 // [v0.39.3] 项目目录用的文件夹图标（线条 + 圆角，与其它图标同一 stroke 1.5 风格）
 const IcFolder: React.FC<IcProps> = ({ size = 14 }) => svg(size, <path d="M3 7.5a2 2 0 0 1 2-2h3.2a2 2 0 0 1 1.4.6l.8.8a2 2 0 0 0 1.4.6H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />);
+// [v1.0.38.2] 资料页「编辑资料」入口用的铅笔图标（同一 stroke 1.5 线条风格）
+const IcPencil: React.FC<IcProps> = ({ size = 14 }) => svg(size, <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />);
 
 // ═══════════════════════════════════════════════════════════════
 // [v0.39.3] 打开项目根目录（系统默认文件管理器）
@@ -218,7 +220,7 @@ interface Face { glyph: string; pal: string; src?: string; name: string; role: s
 /** 群内成员的脸：display 优先，缺 avatarUrl 时按 faceFor 的项目种子兜底——和 ChatStream 同一条式子。 */
 function memberFace(conv: Conv, m: Member): Face {
   const src = m.display.avatarUrl ?? faceFor(m.id, conv.projectId, conv.projectName).avatarUrl;
-  return { glyph: m.display.glyph, pal: m.display.pal, src, name: memberNameLabel(m.id, m.display.name), role: roleLabel(m.display.role) };
+  return { glyph: m.display.glyph, pal: m.display.pal, src, name: memberNameLabel(m.id, m.display.name), role: assistantRoleLabel(m.display.role) };
 }
 
 /** 知知的脸：固定头像、固定名，角色「接待」。 */
@@ -277,65 +279,58 @@ function permissionOf(m: Member): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// [v0.39.1 #6] 擅长领域 —— 一句完整的自然语言描述，不再是标签词堆砌。
+// [v1.0.38.2] 「擅长领域」= 角色职责一句话描述（单一真源）。
 //
-//   ★ SKILL_BY_ROLE 的键 =  的 label（24 个），与 state.ts /
-//     后端 KNOWN_ROLES 三方对齐的那套角色库一一对应——**改一头必须改另一头**
-//     （CHANGES 附带的 check-skill-coverage 脚本会核对这份映射是否漏了角色）。
-//   查找顺序：角色 label 精确命中 → id 前缀（fe_1 → 'fe' → '前端'）→ 兜底模板。
+//   [v1.0.38.3] 用户实测反馈：资料页不要单独加一行职责描述，让「擅长领域」直接
+//   显示职责描述即可。旧的 SKILL_BY_ROLE / skillCoordinator / skillOf 那套「旧擅长
+//   文案」已整体删除——角色前缀 → 一句话职责，与 backend/roles.py ASSISTANT_PROFILES
+//   的 desc 对齐（Zinnia 不是 Worker，保留自己专属那句 skillZinnia）。
 // ═══════════════════════════════════════════════════════════════
 
 export const skillZinnia = () =>
   i18n.t('contacts.view.70');
 
-export const skillCoordinator = () =>
-  i18n.t('contacts.view.84');
+/** 项目经理（coordinator）的职责兜底：原 SKILL_BY_ROLE / skillCoordinator 旧擅长已删，给一句职责。 */
+const COORDINATOR_DESC = '把任务拆开分给成员、盯进度、管风险，确保项目按时高质量交付';
 
 /**
- * 24 个已知角色（键与 .label 一致）→ 一句成文的擅长领域。
- *
- * [v0.39.2 #1] 每句都收敛到该职能的真实工作场景 / 核心能力 / 产出特征，带上这一行
- *   才会用到的具体术语（如前端的「状态流转」、后端的「事务与缓存一致性」、SRE 的
- *   「错误预算」、DBA 的「慢查询与分库分表」），不再是能安到任何角色头上的口号。
+ * [v1.0.38.2] 角色职责一句话描述（ZH 基准，与 backend/roles.py ASSISTANT_PROFILES 的 desc 对齐）。
+ * 键 = 角色 type 前缀（fe/be/pm/...，即 id 去掉 `_编号` 后的部分）；项目经理走 COORDINATOR_DESC
+ * 兜底；库外角色返回空串，调用方自行兜底。只做**查表**用，不承担归一化——称呼统一走 assistantRoleLabel。
  */
-export const SKILL_BY_ROLE: Record<string, string> = {
-  fe: 'contacts.view.69',
-  be: 'contacts.view.88',
-  pm: 'contacts.view.67',
-  qa: 'contacts.view.39',
-  ux: 'contacts.view.65',
-  da: 'contacts.view.38',
-  devops: 'contacts.view.62',
-  sec: 'contacts.view.40',
-  ml: 'contacts.view.45',
-  mobile: 'contacts.view.48',
-  game: 'contacts.view.68',
-  gis: 'contacts.view.51',
-  mkt: 'contacts.view.46',
-  fin: 'contacts.view.79',
-  hc: 'contacts.view.50',
-  edu: 'contacts.view.83',
-  ar: 'contacts.view.76',
-  sup: 'contacts.view.94',
-  sre: 'contacts.view.81',
-  db: 'contacts.view.87',
-  arch: 'contacts.view.86',
-  writer: 'contacts.view.66',
-  media: 'contacts.view.63',
-  legal: 'contacts.view.53',
+const DESC_BY_ROLE: Record<string, string> = {
+  fe: '把网页/应用/App的页面做出来，做出好看又好用的界面',
+  be: '写服务器和接口，让数据能存、能读、能对接',
+  pm: '把你想做的产品、模糊的想法梳理成清楚的需求和待办清单',
+  qa: '帮你试功能、找 bug、验收成果做得好不好',
+  ux: '做平面设计、界面视觉、交互流程，让图形好看',
+  da: '整理数据、算指标、做图表、给你结论',
+  db: '设计、维护数据库，优化查询、备份恢复',
+  devops: '把东西传到云仓库、部署环境、安装依赖、把项目上线',
+  sec: '查代码和系统的深层次漏洞（不是单纯测bug）、查权限风险',
+  ml: '帮你研究LLM模型、训练、调提示词、检索研究',
+  mobile: '做iOS/安卓手机应用，适配各种手机平台',
+  game: '做游戏玩法、关卡、平衡设计',
+  arch: '设计软件后台架构、系统结构、帮你做技术选型',
+  gis: '处理地图和空间数据、做地理分析可视化',
+  media: '处理音频视频、剪辑、压字幕、转格式',
+  sre: '监控系统、排查故障、保障系统稳定不宕机',
+  sup: '排查问题、解答疑问、整理常见问题',
+  writer: '写文档、教程、README、发布说明',
+  fin: '做财务模型、预测、算成本和估值',
+  hc: '查阅医学文献、整理医学证据、解读健康数据、提出医学建议',
+  edu: '通用型学术助手，查文献、做研究、整理学习研究方法等',
+  legal: '审合同条款、查合规、看开源许可等',
+  mkt: '做增长方案、内容和渠道、竞品调研等',
+  ar: '做 AR/VR/3D、空间交互体验',
 };
 
-function skillOf(m: Member): string {
-  if (isCoordinator(m.id)) return skillCoordinator();
-  // 键 =  的 type（fe/be/...），语言无关；值 = i18n key，渲染时求值。
+function descOf(m: Member): string {
+  if (isCoordinator(m.id)) return COORDINATOR_DESC;
   const type = m.id.split('_')[0] ?? '';
-  const byType = SKILL_BY_ROLE[type];
-  if (byType) return i18n.t(byType);
-  const role = (roleLabel(m.display.role) || '').trim();
-  // 库外角色（KNOWN_ROLES 之外，正常不该出现）：仍给一句成句描述，别让资料页开天窗。
-  // 注意不套用「在项目中承担 XX 方向的工作」这类被点名的万能模板（[v0.39.2 #1]）。
-  return i18n.t('contacts.view.roleDesc', { role: role || i18n.t('contacts.view.89') });
+  return DESC_BY_ROLE[type] ?? '';
 }
+
 
 // 资料页里的「职责描述」：production 没有 per-agent 的 SOUL 字段，按角色合成一句像样的。
 function agentSoul(conv: Conv, m: Member): string {
@@ -343,7 +338,7 @@ function agentSoul(conv: Conv, m: Member): string {
   if (isCoordinator(m.id)) {
     return i18n.t('contacts.view.leadDesc', { proj });
   }
-  return i18n.t('contacts.view.workerDesc', { proj, role: roleLabel(m.display.role) || i18n.t('contacts.view.82') });
+  return i18n.t('contacts.view.workerDesc', { proj, role: assistantRoleLabel(m.display.role) || i18n.t('contacts.view.82') });
 }
 
 /** 副标题（#2：文案差异全部来自数据，渲染结构对项目经理零分支）。 */
@@ -351,7 +346,7 @@ function subtitleOf(conv: Conv, m: Member): string {
   const proj = conv.projectName || conv.projectId;
   return isCoordinator(m.id)
     ? i18n.t('contacts.view.leadTag', { proj })
-    : i18n.t('contacts.view.workerTag', { proj, role: roleLabel(m.display.role) || 'Agent' });
+    : i18n.t('contacts.view.workerTag', { proj, role: assistantRoleLabel(m.display.role) || 'Agent' });
 }
 
 /** 当前状态（#4：随 store 实时切换；归档态一并覆盖）。 */
@@ -670,7 +665,7 @@ const ContactRow: React.FC<{
   >
     <Avatar glyph={face.glyph} pal={face.pal} size={size} src={face.src} />
     <span className="navrow-nm">{face.name}</span>
-    <span className="navrow-tag">{roleLabel(face.role)}</span>
+    <span className="navrow-tag">{assistantRoleLabel(face.role)}</span>
   </div>
 );
 
@@ -770,6 +765,46 @@ const AgentProfile: React.FC<{ projectId: string; agentId: string; api: PanelApi
   const editAgentModel = useSettingsStore((s) => s.editAgentModel);
   const clearAgentModel = useSettingsStore((s) => s.clearAgentModel);
 
+  /*
+   * [v1.0.38.2] 编辑资料（改名 + 换头像）：人话化入口。
+   *  hook 全部在早退之前调用，规则安全。updateAgentProfile 走 store → 后端 → 广播，
+   *   事件回来后各项目的 display.name / display.avatarUrl 自动刷新，全程无需碰展示逻辑。
+   */
+  const updateAgentProfile = useKnoweStore((s) => s.updateAgentProfile);
+  const [editing, setEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [avatarDraft, setAvatarDraft] = useState<string | undefined>(undefined);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /*
+   * [v1.0.38.2 修复#1] 切换查看的 agent 时，编辑态必须复位。
+   * 否则从 A 的编辑面板直接切到 B，组件复用（只换 props 不卸载），
+   * editing / nameDraft 残留 → `pf-edit-panel` 还显示 A 的名字/草稿。
+   * ★ 放 profileEditReq 的 useEffect 之前：切 agent 时若右键「更改头像/用户名」
+   * 同时请求，先复位再响应请求（否则 reset 会把请求的打开覆盖掉）。
+   */
+  useEffect(() => {
+    setEditing(false);
+    setNameDraft('');
+    setAvatarDraft(undefined);
+  }, [projectId, agentId]);
+
+  /*
+   * [v1.0.38.2] 右键菜单「更改头像/用户名」的跨组件请求（ContextMenu 写入）。
+   * 命中本面板显示的 agent → 预填名字并打开编辑态，然后清掉请求（一次性）。
+   * 名字直接从 store 现取（本次挂载的 member 在早退之后才拿到），不经中间态。
+   */
+  const profileEditReq = useKnoweStore((s) => s.contactProfileEditRequest);
+  const clearContactProfileEdit = useKnoweStore((s) => s.clearContactProfileEdit);
+  useEffect(() => {
+    if (!profileEditReq || profileEditReq.projectId !== projectId || profileEditReq.agentId !== agentId) return;
+    const mem = useKnoweStore.getState().convs[projectId]?.members?.find((c) => c.id === agentId);
+    setNameDraft(mem ? memberNameLabel(mem.id, mem.display.name) : '');
+    setAvatarDraft(undefined);
+    setEditing(true);
+    clearContactProfileEdit();
+  }, [profileEditReq, projectId, agentId, clearContactProfileEdit]);
+
   if (!conv) return <EmptyPanel />;
   const member = (conv.members || []).find((m) => m.id === agentId);
   if (!member) return <EmptyPanel />;
@@ -777,16 +812,110 @@ const AgentProfile: React.FC<{ projectId: string; agentId: string; api: PanelApi
   const f = memberFace(conv, member);
   const proj = conv.projectName || conv.projectId;
 
+  // 进入编辑态时，用当前 display 的值预填草稿（首次进入才写，避免每次重渲都覆盖用户输入）。
+  const enterEdit = () => {
+    setNameDraft(f.name);
+    setAvatarDraft(undefined);
+    setEditing(true);
+  };
+
+  // 选中的本地图片 → FileReader → dataURL 字符串（可存进 display.avatarUrl，跨项目全局生效）。
+  const onPickAvatar = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : undefined;
+      if (dataUrl) setAvatarDraft(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onSaveEdit = () => {
+    const attrs: { name?: string; avatar?: string } = {};
+    const name = nameDraft.trim();
+    if (name && name !== f.name) attrs.name = name;
+    if (avatarDraft) attrs.avatar = avatarDraft;
+    if (attrs.name || attrs.avatar) {
+      updateAgentProfile(projectId, agentId, attrs);
+      toast('资料已保存');
+    }
+    setEditing(false);
+  };
+
   return (
     <div className="profile">
       {/* [#2] 头部：与知知 / 群资料页同一结构，Avatar 走合法的 44 号类，CSS 统一放大到 64。 */}
       <div className="pf-top">
-        <Avatar glyph={f.glyph} pal={f.pal} size={44} src={f.src} />
+        <Avatar glyph={f.glyph} pal={f.pal} size={44} src={avatarDraft || f.src} />
         <div>
-          <div className="pf-nm">{f.name}</div>
+          {/* [v1.0.38.2] 编辑入口按钮紧跟名字后面（同一行、垂直居中），不再是右上角。 */}
+          <div className="pf-nm-row">
+            <div className="pf-nm">{f.name}</div>
+            <button
+              type="button"
+              className="pf-edit"
+              aria-label="编辑资料"
+              onClick={enterEdit}
+              title="编辑资料"
+            >
+              <IcPencil size={17} />
+            </button>
+          </div>
           <div className="pf-role">{subtitleOf(conv, member)}</div>
         </div>
       </div>
+
+      {/* [v1.0.38.2] 编辑态：改名 + 换头像 + 保存/取消 */}
+      {editing && (
+        <div className="pf-edit-panel">
+          <div className="pf-edit-row">
+            <label>{t('contacts.view.52')}</label>
+            <input
+              type="text"
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              className="pf-edit-input"
+              onKeyDown={(e) => {
+                // [v1.0.38.2] 输入框按 Enter 等价「保存」
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  onSaveEdit();
+                }
+              }}
+            />
+          </div>
+          <div className="pf-edit-row">
+            <label>头像</label>
+            <div className="pf-edit-avatar">
+              <button
+                type="button"
+                className="pf-edit-choose"
+                onClick={() => fileRef.current?.click()}
+              >
+                {avatarDraft ? '已选新头像' : '更换头像'}
+              </button>
+              {avatarDraft && <img className="pf-edit-preview" src={avatarDraft} alt="" />}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={onPickAvatar}
+              />
+            </div>
+          </div>
+          <div className="pf-edit-actions">
+            <button type="button" className="pf-edit-save" onClick={onSaveEdit}>
+              保存
+            </button>
+            <button type="button" className="pf-edit-cancel" onClick={() => setEditing(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="pf-sec">
         <h4>{t('contacts.view.49')}</h4>
@@ -802,8 +931,8 @@ const AgentProfile: React.FC<{ projectId: string; agentId: string; api: PanelApi
       <div className="pf-sec">
         <h4>{t('contacts.view.34')}</h4>
         <Kv k={t('contacts.view.85')} v={agentSoul(conv, member)} />
-        {/* [#6] 一句完整的自然语言描述（24 角色逐一成文 + 兜底模板） */}
-        <Kv k={t('contacts.view.71')} v={skillOf(member)} />
+        {/* [v1.0.38.2] 「擅长领域」直接显示角色职责描述（不再单独加一行职责描述）。 */}
+        <Kv k={t('contacts.view.71')} v={descOf(member)} />
       </div>
 
       {/*
@@ -817,7 +946,7 @@ const AgentProfile: React.FC<{ projectId: string; agentId: string; api: PanelApi
       <div className="pf-sec">
         <h4>{t('common.18')}</h4>
         <div className="pf-scope">
-          {t('contacts.view.modelOverrideNote', { proj, role: roleLabel(member.display.role) || t('common.07') })}
+          {t('contacts.view.modelOverrideNote', { proj, role: assistantRoleLabel(member.display.role) || t('common.07') })}
         </div>
         <ModelBindingModule
           binding={agentBinding}
