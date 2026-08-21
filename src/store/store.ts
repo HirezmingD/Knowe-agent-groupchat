@@ -15,12 +15,26 @@ import { immer } from 'zustand/middleware/immer';
 import type { InboundEvent, ActivityLedgerEntry } from '../contract/envelope';
 import type { SocketAPI } from '../transport/socket';
 import { PLATFORM_PROJECT_ID } from './avatar';
+import { preloadAvatarBulk } from './avatarPreload';
 import { dmSessionId, dmGroupOf, parseDmId } from './chat';
 import { reconcileProjectAlias } from './projectAlias';
 import { runtimeHttpBase } from '../shared/runtimeEndpoints';
+import {
+  loadSessionDir,
+  scheduleSessionDirSave,
+  type SessionDirCache,
+} from './sessionDirCache';
+import {
+  loadMessageCache,
+  scheduleMessageSave,
+  clearMessageCache,
+  cachedToItem,
+  buildMessageCacheFromConvs,
+} from './messageCache';
 import { runtimeFetch } from '../shared/runtimeFetch';
 import {
   type Conv,
+  type Item,
   type UserItem,
   type ConnStatus,
   type AgentRegistry,
@@ -424,6 +438,13 @@ function isBumpEvent(conv: Conv, event: InboundEvent): boolean {
 const _synced = new Set<string>();
 
 /**
+ * [v1.0.39] 会话目录缓存来源记账：populate 时登记每个缓存项目，
+ * project_created（服务端确认）到达即移除；syncAllProjects 末尾对
+ * 剩余项（= 服务端没有的假群）执行对账移除。
+ */
+const _cachePopulated = new Set<string>();
+
+/**
  * [v0.8c #1] 开机要把**每个**项目的快照都要过来 —— 但不能一口气全砸出去。
  *
  *   v0.8b 只在「点进某个群」时要一次。于是开机看到的是一排文字头像，
@@ -435,16 +456,16 @@ const _synced = new Set<string>();
  *   所以排队：当前这个群立刻发（用户正看着它），其余的每 150ms 发一个。
  *   一个 20 群的用户，3 秒内全部到齐，而且服务端一直是从容的。
  */
-const SNAPSHOT_STAGGER_MS = 150;
+const SNAPSHOT_CONCURRENCY = 4;
 const _snapQueue: string[] = [];
-let _snapTimer: ReturnType<typeof setTimeout> | null = null;
+let _snapInFlight = 0;
 let _bulkScheduled = false;
 
 /** 连接断了/重连了 → 之前要过的都不算数了，排队中的也一并作废 */
 function resetSynced(): void {
   _synced.clear();
   _snapQueue.length = 0;
-  if (_snapTimer) { clearTimeout(_snapTimer); _snapTimer = null; }
+  _snapInFlight = 0;
   _bulkScheduled = false;
 }
 
@@ -459,18 +480,27 @@ function reconcileSnapshotAlias(requestProjectId: string, canonicalProjectId: st
   }
 }
 
+/**
+ * [v1.0.39] 有界并发 pump：同时最多 SNAPSHOT_CONCURRENCY 个在途，完成一个补发一个。
+ * 原来每 150ms 串行发一个（20 群 = 3 秒），本地后端读+投影成本低，快照裁剪
+ * （limit）后单次更轻；有界而不是无限，因为每个快照消耗 1 个 seq + 后台写盘
+ * （persist defer_bg 单线程队列），并发 4 在「快」与「从容」之间取平衡。
+ */
 function pumpSnapshots(getSocket: () => SocketAPI | null): void {
-  if (_snapTimer) return;                     // 队列已经在跑了
-  const step = (): void => {
-    _snapTimer = null;
+  while (_snapInFlight < SNAPSHOT_CONCURRENCY) {
     const pid = _snapQueue.shift();
-    if (pid === undefined) return;
+    if (pid === undefined) break;
     const socket = getSocket();
-    if (!socket) { _snapQueue.length = 0; return; }
+    if (!socket) { _snapQueue.length = 0; _snapInFlight = 0; return; }
+    _snapInFlight += 1;
     socket.requestSnapshot(pid);
-    if (_snapQueue.length) _snapTimer = setTimeout(step, SNAPSHOT_STAGGER_MS);
-  };
-  _snapTimer = setTimeout(step, SNAPSHOT_STAGGER_MS);
+    // 快照是异步的（state_snapshot 回传才算完）；用一个固定短时释放槽位，
+    // 保证并发上限稳定。快照本身极快返回（本地后端 + limit 裁剪）。
+    setTimeout(() => {
+      _snapInFlight = Math.max(0, _snapInFlight - 1);
+      pumpSnapshots(getSocket);
+    }, 50);
+  }
 }
 
 /**
@@ -488,7 +518,8 @@ function requestSnapshotOnce(
   if (!socket) return;
   _synced.add(projectId);
   if (now) {
-    socket.requestSnapshot(projectId);
+    // [v1.0.39] 首屏裁剪：请求最近 100 条（旧后端忽略未知字段 → 返回全量）
+    socket.requestSnapshot(projectId, 100);
     return;
   }
   _snapQueue.push(projectId);
@@ -550,6 +581,10 @@ export interface KnoweStore {
   /** 「折叠聊天」区域的本窗口开合状态。 */
   foldedOpen: boolean;
   conversationStatesLoaded: boolean;
+  /** [v1.0.39] 当前会话是否还有更早历史（翻页加载标记）。 */
+  historyHasMore: boolean;
+  /** [v1.0.39] 当前会话已加载的最早 seq（下次翻页的 before_seq）。 */
+  historyEarliestSeq: number;
 
   // ── Config (injectable for tests) ──
   agents: AgentRegistry;
@@ -578,6 +613,14 @@ export interface KnoweStore {
   exitDm: (dmSessionId: string) => void;
   /** [v0.8c #1] 连上之后：把所有已知项目的快照都要一遍（排队，不打爆后端） */
   syncAllProjects: () => void;
+  /** [v1.0.39] 启动秒出：从本地会话目录缓存 populate。 */
+  populateFromCache: () => void;
+  /** [v1.0.39] 对账移除：删除缓存里有、服务端确认不存在的项目。 */
+  removeCacheStaleProjects: (projectIds: string[]) => void;
+  /** [v1.0.39] 构建当前会话目录缓存（供保存回调）。 */
+  buildSessionDirCache: () => SessionDirCache;
+  /** [v1.0.39] 会话目录变化 → 防抖落盘。 */
+  markSessionDirDirty: () => void;
 
   // ── [v0.8d #5] 未读 ──
   /** 窗口在不在前台。不在前台时，连「当前这个群」的新消息也算未读——你没在看。 */
@@ -780,6 +823,10 @@ export const useKnoweStore = create<KnoweStore>()(
     pinnedCollapsed: false,
     foldedOpen: false,
     conversationStatesLoaded: false,
+    /** [v1.0.39] 当前会话是否还有更早历史（翻页加载标记）。 */
+    historyHasMore: false,
+    /** [v1.0.39] 当前会话已加载的最早 seq（下次翻页的 before_seq）。 */
+    historyEarliestSeq: 0,
     windowFocused: true,        // [v0.8d #5] 开机时窗口就在你眼前
 
     agents: DEFAULT_AGENTS,
@@ -921,6 +968,160 @@ export const useKnoweStore = create<KnoweStore>()(
       // 知知也要：她的窗口里有欢迎语和历史（后端 v0.8c 起会温载 __platform__）
       requestSnapshotOnce(PLATFORM_PROJECT_ID, getSocket);
       for (const pid of projectOrder) requestSnapshotOnce(pid, getSocket);
+
+      // [v1.0.39] 对账移除：此刻 project_created 已全部补发落地，
+      // 缓存来源但服务端未确认的项目 = 假群（数据被清/群被删）→ 静默移除。
+      // 只删"确认缺失"，绝不动服务端确认过的项目。
+      if (_cachePopulated.size > 0) {
+        const stale = Array.from(_cachePopulated);
+        _cachePopulated.clear();
+        if (stale.length > 0) get().removeCacheStaleProjects(stale);
+      }
+    },
+
+    /**
+     * [v1.0.39] 启动秒出：从本地会话目录缓存 populate（store 创建后立即调用）。
+     * 只填充"目录层"（群/顺序/分组/花名册/DM），不缓存消息本体；未读一律 0，
+     * 以服务端 unread_count 为准覆盖（避免红点闪一下消失）。固定停知知。
+     */
+    populateFromCache(): void {
+      const cache = loadSessionDir();
+      if (!cache || (cache.projects.length === 0 && cache.dm.length === 0)) {
+        // [v1.0.39-B3] 目录缓存为空 = 数据被清/首次安装 → 消息缓存一并清空，
+        // 防止「目录已清但旧聊天记录还在」的残留回显。
+        clearMessageCache();
+        return;
+      }
+      const { agents, roleTypes } = get();
+      set((draft) => {
+        for (const entry of cache.projects) {
+          if (entry.projectId === PLATFORM_PROJECT_ID || parseDmId(entry.projectId)) continue;
+          const conv = registerProject(draft.convs, entry.projectId, entry.projectName, entry.projectDir);
+          conv.unread = 0;
+          if (entry.folded) draft.foldedProjects[entry.projectId] = true;
+          if (entry.pinned) draft.pinnedProjects[entry.projectId] = entry.pinned_at || Date.now() * 1000;
+          if (entry.muted) draft.mutedProjects[entry.projectId] = true;
+          if (!draft.projectOrder.includes(entry.projectId)) insertProjectOrder(draft, entry.projectId);
+          for (const m of entry.members) {
+            registerMember(conv, m.id, agents, roleTypes, m.role, m.name, true, m.avatar);
+          }
+          _cachePopulated.add(entry.projectId);
+        }
+        for (const dm of cache.dm) {
+          const conv = ensureConversation(draft.convs, dm.sessionId);
+          if (dm.displayName && conv.projectName === dm.agentId) conv.projectName = dm.displayName;
+        }
+        // [v1.0.39-B3] 消息层回显：把本地缓存的聊天记录灌进会话（点进群秒出）。
+        // 只回显已有会话（目录层注册过的群/私聊），不回显不存在的会话；
+        // 服务端快照到达后整体重建覆盖（快照是权威，缓存只是「上次的映像」）。
+        const msgCache = loadMessageCache();
+        if (msgCache) {
+          for (const pid of Object.keys(msgCache.byProject)) {
+            const conv = draft.convs[pid];
+            if (!conv || conv.items.length > 0) continue;
+            const msgs = msgCache.byProject[pid];
+            if (!msgs || msgs.length === 0) continue;
+            const items: Item[] = [];
+            for (const m of msgs) {
+              const it = cachedToItem(m);
+              if (it) items.push(it);
+            }
+            if (items.length > 0) conv.items = items;
+          }
+        }
+        normalizeProjectOrder(draft);
+        draft.conversationStatesLoaded = true;
+      });
+      // [v1.0.39-B] 头像预载提前：populate 后立即把全部成员的 avatarUrl 灌进
+      // avatarCache（Avatar 组件与预载共享同一缓存池）——图片在 React 首帧
+      // 渲染前就开始加载，渲染时命中 loading/ok，文字字形只存在于图片真实
+      // 加载期间，不再"首帧全字形等几秒"。
+      const cacheAvatarUrls: string[] = [];
+      {
+        const s = get();
+        for (const pid of s.projectOrder) {
+          const conv = s.convs[pid];
+          if (!conv) continue;
+          for (const m of conv.members ?? []) {
+            if (m.status !== 'removed' && m.display.avatarUrl) cacheAvatarUrls.push(m.display.avatarUrl);
+          }
+        }
+      }
+      preloadAvatarBulk(cacheAvatarUrls);
+    },
+
+    /**
+     * [v1.0.39] 对账移除：删除缓存里有、服务端确认不存在的项目（假群）。
+     * 只做增量校正（从 projectOrder/状态/花名册移除），不动服务端确认的群。
+     */
+    removeCacheStaleProjects(projectIds: string[]): void {
+      if (!projectIds || projectIds.length === 0) return;
+      set((draft) => {
+        for (const pid of projectIds) {
+          if (pid === PLATFORM_PROJECT_ID || parseDmId(pid)) continue;
+          delete draft.convs[pid];
+          const idx = draft.projectOrder.indexOf(pid);
+          if (idx >= 0) draft.projectOrder.splice(idx, 1);
+          delete draft.pinnedProjects[pid];
+          delete draft.mutedProjects[pid];
+          delete draft.foldedProjects[pid];
+        }
+        normalizeProjectOrder(draft);
+      });
+      // [v1.0.39] 假群已移除 → 同步回写缓存（否则下次启动缓存里还有它，
+      // populate 会再闪一下才被对账清掉）。
+      get().markSessionDirDirty();
+    },
+
+    /**
+     * [v1.0.39] 构建当前会话目录缓存（供 scheduleSessionDirSave 回调）。
+     */
+    buildSessionDirCache(): SessionDirCache {
+      const s = get();
+      return {
+        schemaVersion: 1,
+        savedAt: Date.now(),
+        projects: s.projectOrder
+          .filter((pid) => pid !== PLATFORM_PROJECT_ID && !parseDmId(pid))
+          .map((pid) => {
+            const conv = s.convs[pid];
+            return {
+              projectId: pid,
+              projectName: conv?.projectName || pid,
+              projectDir: conv?.projectDir,
+              pinned: !!s.pinnedProjects[pid],
+              folded: !!s.foldedProjects[pid],
+              muted: !!s.mutedProjects[pid],
+              pinned_at: s.pinnedProjects[pid] || 0,
+              members: (conv?.members ?? [])
+                .filter((m) => m.status !== 'removed')
+                .map((m) => ({
+                  id: m.id,
+                  role: m.display.role,
+                  name: m.display.name,
+                  avatar: m.display.avatarUrl || undefined,
+                })),
+            };
+          }),
+        dm: Object.keys(s.convs)
+          .filter((sid) => !!parseDmId(sid))
+          .map((sid) => {
+            const c = s.convs[sid];
+            const dm = parseDmId(sid);
+            return {
+              sessionId: sid,
+              projectId: dm?.projectId || '',
+              agentId: dm?.agentId || '',
+              displayName: c?.projectName || dm?.agentId || sid,
+            };
+          }),
+        activeView: s.activeView,
+      };
+    },
+
+    /** [v1.0.39] 会话目录变化 → 防抖落盘（任意列表相关事件后调用）。 */
+    markSessionDirDirty(): void {
+      scheduleSessionDirSave(() => get().buildSessionDirCache());
     },
 
     registerProject(projectId: string, projectName?: string): Conv {
@@ -1258,6 +1459,31 @@ export const useKnoweStore = create<KnoweStore>()(
       }
 
       set((draft) => {
+        // [v1.0.39] 向前翻页响应：旁路注入更早历史到 items 头部（按 seq 归位，不重建不闪烁）
+        if (eventType === 'history_events') {
+          const he = event as InboundEvent & { events?: InboundEvent[]; has_more?: boolean; earlier_seq?: number };
+          const evs = Array.isArray(he.events) ? he.events : [];
+          if (evs.length > 0) {
+            const conv = ensureConversation(draft.convs, pid);
+            const oldEarliest = conv.items.reduce<number>((min, it) => {
+              const s = (it as { seq?: number }).seq;
+              return typeof s === 'number' && (min === 0 || s < min) ? s : min;
+            }, 0);
+            for (const ev of evs) applyEvent(conv, ev, agents, roleTypes);
+            // 按 seq 稳定归位：历史事件（seq < oldEarliest 或原来没有的）排到头部
+            if (oldEarliest > 0) {
+              conv.items.sort((a, b) => {
+                const sa = (a as { seq?: number }).seq ?? Number.MAX_SAFE_INTEGER;
+                const sb = (b as { seq?: number }).seq ?? Number.MAX_SAFE_INTEGER;
+                if (sa === Number.MAX_SAFE_INTEGER && sb === Number.MAX_SAFE_INTEGER) return 0;
+                return sa - sb;
+              });
+            }
+            draft.historyHasMore = he.has_more ?? false;
+            draft.historyEarliestSeq = he.earlier_seq ?? oldEarliest;
+          }
+          return;
+        }
         if (eventType === 'project_delete_progress') {
           const operationId = typeof rawEvent.operation_id === 'string' ? rawEvent.operation_id : '';
           const message = typeof rawEvent.message === 'string' ? rawEvent.message : '';
@@ -1454,7 +1680,22 @@ export const useKnoweStore = create<KnoweStore>()(
         scheduleTransientFrameFallback(pid, pendingTransientFrameIds(projected));
       }
 
-      if (eventType === 'project_created' && !parseDmId(pid)) scheduleConversationStateSync();
+      if (eventType === 'project_created' && !parseDmId(pid)) {
+        scheduleConversationStateSync();
+        // [v1.0.39] 服务端确认此项目存在 → 从缓存来源记账移除（对账用）
+        _cachePopulated.delete(pid);
+      }
+      // [v1.0.39] 会话目录层变化 → 防抖写回本地缓存（启动秒出的数据源）
+      // agents_created（成员入驻）也要保存——否则缓存里群的 members 停在空/旧态，
+      // 重启 populate 后群头像宫格无成员可拼 → 文字字形，等后端补发花名册才换图。
+      if (eventType === 'project_created' || eventType === 'project_renamed'
+          || eventType === 'project_state_changed' || eventType === 'agents_created') {
+        get().markSessionDirDirty();
+      }
+      // [v1.0.39-B3] 消息层变化 → 防抖写回本地缓存（启动秒出的聊天记录数据源）。
+      // 任意事件都触发（含 stream_delta），内部 1200ms 防抖合并；build 回调落盘时才
+      // 读最新 state，只取最近 CACHE_MSG_LIMIT 条落定消息。
+      scheduleMessageSave(() => buildMessageCacheFromConvs(get().convs));
     },
 
     /**
@@ -1471,6 +1712,8 @@ export const useKnoweStore = create<KnoweStore>()(
         }
       });
       scheduleTransientFrameFallback(projectId, pendingTransientFrameIds(get().convs[projectId]));
+      // [v1.0.39-B3] 增量注入也算消息层变化 → 同步防抖写回本地缓存
+      scheduleMessageSave(() => buildMessageCacheFromConvs(get().convs));
     },
 
     ackTransientFrame(projectId: string, frameId: string): void {
@@ -1936,3 +2179,9 @@ export const useKnoweStore = create<KnoweStore>()(
     },
   })),
 );
+
+// [v1.0.39] 启动秒出：模块加载时（React 渲染任何组件之前）同步 populate。
+// 群列表首帧即满，不等 WS 握手；对账由 syncAllProjects（live 后）静默修正。
+useKnoweStore.getState().populateFromCache();
+// [v1.0.39-B] 模块级兜底：后端补发的成员头像（populate 之后才到的）由组件自
+// 己 preloadAvatar 兜底，这里无需重复。

@@ -17,6 +17,29 @@
 import { resolve } from 'node:path';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
+import type { Plugin } from 'vite';
+
+/**
+ * [v1.0.39-B] dev 头像长缓存：
+ * Vite dev 对 public 静态资源默认 `Cache-Control: no-cache` —— 每次启动
+ * 49 张头像全量重新验证（虽然后台 304 很快，但冷启动 + 首帧渲染叠加
+ * 仍是"文字字形等几秒"的元凶之一）。给 /avatars/ 路径加长缓存头：
+ * 第二次启动起图片直接命中 Chromium 磁盘缓存，不再逐张 revalidate。
+ * 只作用于头像路径，不碰模块/HMR 资源。
+ */
+function avatarCacheHeadersPlugin(): Plugin {
+  return {
+    name: 'knowe-avatar-cache-headers',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url?.startsWith('/avatars/')) {
+          res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+        }
+        next();
+      });
+    },
+  };
+}
 
 export default defineConfig({
   // ── 主进程 ──
@@ -49,7 +72,7 @@ export default defineConfig({
   renderer: {
     // 渲染进程的根就是项目根，入口是根目录的 index.html。
     root: '.',
-    plugins: [react()],
+    plugins: [react(), avatarCacheHeadersPlugin()],
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src'),

@@ -217,7 +217,35 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
   const { t } = useCachedT();
   // [v1.0.23.5] per-session 订阅：selector 由 useMemo 按 projectId 缓存（引用稳定，不触发多余重渲染）；
   //   immer 引用隔离保证只有本会话数据变化才重渲染。
+  // [v1.0.39] 向前翻页：historyHasMore + 单飞防抖（一个在途请求只发一次）
+  const historyHasMore = useKnoweStore((s) => s.historyHasMore);
+  const historyLoadingRef = useRef(false);
+  const loadMoreHistory = (): void => {
+    if (!projectId || !historyHasMore || historyLoadingRef.current) return;
+    const earliest = useKnoweStore.getState().historyEarliestSeq;
+    if (!earliest || earliest <= 0) return;
+    historyLoadingRef.current = true;
+    const sock = useKnoweStore.getState()._socket;
+    sock?.requestHistory(projectId, earliest);
+    // history_events 到达后由 store 更新 historyHasMore；这里用短时假锁防连发，
+    // 新事件注入后重置（见下方订阅）。
+    window.setTimeout(() => { historyLoadingRef.current = false; }, 600);
+  };
+
   const items = useKnoweStore(useMemo(() => makeSelectItems(projectId), [projectId]));
+
+  // [v1.0.39] 历史注入完成后解除假锁（新数据到位即可继续翻页）
+  useEffect(() => {
+    if (historyLoadingRef.current) {
+      historyLoadingRef.current = false;
+      // 若仍触顶（上翻后用户还在顶部），继续拉下一页
+      const el = msgsRef.current;
+      if (el && el.scrollTop <= 4) {
+        window.setTimeout(loadMoreHistory, 50);
+      }
+    }
+    // historyHasMore 变化 = history_events 注入完成
+  }, [historyHasMore]);
   // [v1.0.23.4] 渲染调度：消息列表渲染标记为可延迟/可中断——点击切群时
   //   头部/列表（轻量订阅）立即响应，消息区渲染让出主线程、空闲分片完成。
   const deferredItems = useDeferredValue(items);
@@ -1004,6 +1032,8 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
   const onScroll = (): void => {
     const el = msgsRef.current;
     if (!el) return;
+    // [v1.0.39] 触顶加载更早历史（微信同款：滚到顶自动向上翻）
+    if (el.scrollTop <= 4) loadMoreHistory();
     // [v1.0.23.6-r3] 底部判定加 300ms 滚轮锁定：
     //   流式增长时 scrollHeight 每帧上涨，用户滚轮向上 M px 会被内容增长 N px 抵消，
     //   bottom 判定仍 <2 → 误判「在底部」→ 贴底 effect 拽回 → 滑块滑不动。
@@ -1422,6 +1452,11 @@ export const ChatStream: React.FC<ChatStreamProps> = ({
         )}
 
         <div className={'msgs' + (selecting ? ' selecting' : '')} ref={msgsRef} onScroll={onScroll} onWheel={onWheel}>
+          {historyHasMore ? (
+            <div className="history-loader" style={{ textAlign: 'center', padding: '10px 0', fontSize: 12, opacity: 0.7 }}>
+              {t('chat.stream.historyLoading')}
+            </div>
+          ) : null}
           <div className="vlist" style={{ position: 'relative', height: totalH }}>
             {(() => {
               const w = win.end >= win.start ? win : { start: 0, end: Math.min(rows.length - 1, 30) };

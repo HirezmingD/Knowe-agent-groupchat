@@ -1240,5 +1240,6 @@
   "token.usage.panel.ctxEntriesUnit": "条",
   "token.usage.panel.ctxApprox": "约",
   "token.usage.panel.ctxTokensUnit": "词元",
-  "token.usage.panel.ctxEmpty": "暂无数据"
+  "token.usage.panel.ctxEmpty": "暂无数据",
+  "chat.stream.historyLoading": "加载更早的消息…"
 }

@@ -309,7 +309,6 @@ class Hub:
             if isinstance(seq, int):
                 merged[seq] = ev
         return [self._filter_public_text(project_id, merged[k]) for k in sorted(merged)]
-
     def durable_since(self, project_id: str, after_seq: int) -> list[dict[str, Any]]:
         """
         [v1.0.23.6] 增量读取：磁盘全量结构历史 + ring 未落盘结构事件，只留 seq > after_seq。
@@ -336,6 +335,43 @@ class Hub:
             if isinstance(seq, int) and seq > after_seq:
                 merged[seq] = ev
         return [self._filter_public_text(project_id, merged[k]) for k in sorted(merged)]
+
+    def durable_before(
+        self, project_id: str, before_seq: int, limit: int,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """
+        [启动时快速加载] 向前翻页：取 seq < before_seq 的**最近 limit 条**结构事件。
+
+        与 durable_since 同源（同一合并逻辑），方向相反——durable_since 取「之后」
+        （增量预热），这里取「之前」（上翻加载更早历史）。
+
+        · 返回 (events, has_more)：events 按 seq 升序、已脱敏（_filter_public_text）；
+          has_more = 还有比 events 首条更早的历史（前端据此决定是否继续显示加载标记）。
+        · limit <= 0 → 视为 1（防呆；调用方应传正数）。
+        · before_seq <= 0 / 无更早事件 → 返回 ([], False)。
+        """
+        if limit <= 0:
+            limit = 1
+        if before_seq <= 0:
+            return [], False
+        proj = self.get_or_create(project_id)
+        merged: dict[int, dict[str, Any]] = {}
+        if self.store is not None:
+            for ev in self.store.load_all_events(project_id):
+                seq = ev.get("seq")
+                if isinstance(seq, int) and seq < before_seq \
+                        and ev.get("type") in STRUCTURAL_EVENT_TYPES:
+                    merged[seq] = ev
+        for ev in proj.ring.structural(STRUCTURAL_EVENT_TYPES):
+            seq = ev.get("seq")
+            if isinstance(seq, int) and seq < before_seq:
+                merged[seq] = ev
+        ordered = [merged[k] for k in sorted(merged)]
+        if not ordered:
+            return [], False
+        has_more = len(ordered) > limit
+        tail = ordered[-limit:]
+        return [self._filter_public_text(project_id, ev) for ev in tail], has_more
 
     # ── 发事件：引擎级（盖 seq、进 ring、广播） ──
     async def emit(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -433,6 +469,8 @@ class Hub:
     async def snapshot(
         self, project_id: str,
         activity: list[dict[str, Any]] | None = None,
+        *,
+        limit: int = 0,
     ) -> dict[str, Any]:
         """
         state_snapshot：**本身消耗一个 seq 并写入 ring**（PROTOCOL.md §e）。
@@ -440,6 +478,17 @@ class Hub:
 
         [v1.0.24.4] activity = 引擎权威活动账本全量条目（见 engine.open_activity_snapshot）。
         传 None = 不带（调用方拿不到引擎）；传 [] = 明确告知「现场无人在干活」。
+
+        [启动时快速加载] limit > 0 = 首屏裁剪：conversation 只下发最近 limit 条结构事件，
+        附 total_count（全量条数）与 has_more（是否还有更早历史，前端据此翻页）。
+
+        ★ 红线（分家铁律）：裁剪只发生在「下发/落盘的这个快照事件」上；
+          磁盘 JSONL 持久历史（persist.load_all_events）与 compact 路径**零改动**——
+          聊天记录权威仍在磁盘，快照只是某一时刻的投影基准，裁剪后前端用
+          request_history 按需翻页取更早历史，不会丢数据。
+
+        ★ unread 语义：未读数必须基于**全量** conversation 计算（裁剪前算），
+          否则裁剪后 unread 会随截断虚低。
         """
         proj = self.get_or_create(project_id)
 
@@ -447,16 +496,26 @@ class Hub:
             # conversation 与 last_seq 必须在同一把 seq 锁下取，避免并发 emit 落在两者之间，
             # 造成“last_seq 已包含某条消息、快照正文却漏了它”的不一致快照。
             conversation = self.durable_conversation(project_id)
+            total_count = len(conversation)
+            unread_count = self._count_unread(proj.last_read_seq, conversation)
             last_seq = proj.seq
             proj.seq += 1
+
+            trimmed = conversation
+            if limit and limit > 0 and total_count > limit:
+                trimmed = conversation[-limit:]
+            has_more = total_count > len(trimmed)
+
             event = {
                 "type": "state_snapshot",
                 "project_id": project_id,
                 "last_seq": last_seq,
                 "agents": list(proj.members),
-                "conversation": conversation,
+                "conversation": trimmed,
                 "pending_card": proj.pending_card,
-                "unread_count": self._count_unread(proj.last_read_seq, conversation),
+                "unread_count": unread_count,
+                "total_count": total_count,
+                "has_more": has_more,
                 "ts": now_ts(),
                 "seq": proj.seq,
             }

@@ -172,7 +172,9 @@ export interface SocketAPI {
   updateAgentProfile: (projectId: string, agentId: string, attrs: { name?: string; avatar?: string }) => void;
   setProjectDirectory: (projectId: string, directory: string, requestId: string, projectName?: string) => void;
   cancelProjectDirectory: (projectId: string, requestId?: string) => void;
-  requestSnapshot: (projectId: string) => void;
+  requestSnapshot: (projectId: string, limit?: number) => void;
+  /** [v1.0.39] 向前翻页：请求比 beforeSeq 更早的历史（上翻加载）。 */
+  requestHistory: (projectId: string, beforeSeq: number, limit?: number) => void;
   /** [v0.48 token] 请求当前项目的 Token 消耗统计；可选以兼容旧测试桩/第三方 SocketAPI 实现。 */
   requestTokenUsage?: (projectId: string, requestId?: number) => void;
   /** [v0.48] 发送任意控制帧（token_usage_req 等旁路统计请求）。 */
@@ -356,7 +358,7 @@ export function createSocket({ url = runtimeWsUrl(), callbacks }: SocketConfig):
   // ── ④ 按项目去抖 resync（§2.3-d） ──
   const _resyncDebounce: Record<string, number> = {};
 
-  function doRequestSnapshot(projectId: string): void {
+  function doRequestSnapshot(projectId: string, limit?: number): void {
     const now = Date.now();
     const last = _resyncDebounce[projectId] ?? 0;
     if (now - last < RESYNC_DEBOUNCE_MS) {
@@ -365,8 +367,11 @@ export function createSocket({ url = runtimeWsUrl(), callbacks }: SocketConfig):
     }
     _resyncDebounce[projectId] = now;
     setStatus('resync');
-    sendRaw({ type: 'request_snapshot', project_id: projectId });
-    console.log('[socket] request_snapshot sent for %s', projectId);
+    // [v1.0.39] 首屏裁剪：limit > 0 只下发最近 N 条（旧后端忽略未知字段 → 全量）
+    const frame: Record<string, unknown> = { type: 'request_snapshot', project_id: projectId };
+    if (limit !== undefined && Number.isInteger(limit) && limit > 0) frame.limit = limit;
+    sendRaw(frame as OutboundCommand);
+    console.log('[socket] request_snapshot sent for %s limit=%s', projectId, limit ?? 'full');
   }
 
   // ── ⑤ 回声哨兵（§3.6） ──
@@ -540,6 +545,18 @@ export function createSocket({ url = runtimeWsUrl(), callbacks }: SocketConfig):
       if (_status === 'resync') setStatus('live'); // 同步完了，别再挂着「同步中」
       diag({ type: ev.type, projectId: projId, seq: snapSeq, verdict: 'applied',
         summary: i18n.t('socket.05') });
+      onEvent(ev);
+      return;
+    }
+
+    /*
+     * [v1.0.39] ★ history_events 也走独木桥：旁路响应（无 seq、不进水位/去重/空洞判定）。
+     *   它是「向前翻页」的结果——把更早的历史补进会话头部。不比水位、不判空洞，
+     *   直接投递给 store（由 history 注入逻辑按 seq 归位到 items 头部）。
+     */
+    if (ev.type === 'history_events') {
+      diag({ type: ev.type, projectId: projId, verdict: 'applied',
+        summary: 'history_events 旁路注入' });
       onEvent(ev);
       return;
     }
@@ -951,8 +968,23 @@ export function createSocket({ url = runtimeWsUrl(), callbacks }: SocketConfig):
      * 800ms 去抖是共用的：刚要过就再要一次，第二次会被吃掉——
      * 那本来也是白要（快照还在路上）。
      */
-    requestSnapshot(projectId: string): void {
-      doRequestSnapshot(projectId);
+    requestSnapshot(projectId: string, limit?: number): void {
+      doRequestSnapshot(projectId, limit);
+    },
+
+    /**
+     * [v1.0.39] 向前翻页：请求比 beforeSeq 更早的历史（上翻加载）。
+     * 独立于快照：history_events 是旁路响应（无 seq），不进水位/去重。
+     */
+    requestHistory(projectId: string, beforeSeq: number, limit?: number): void {
+      if (!projectId || !Number.isInteger(beforeSeq) || beforeSeq <= 0) return;
+      const payload: Record<string, unknown> = {
+        type: 'request_history',
+        project_id: projectId,
+        before_seq: beforeSeq,
+      };
+      if (limit !== undefined && Number.isInteger(limit) && limit > 0) payload.limit = limit;
+      sendRaw(payload as OutboundCommand);
     },
 
     /**

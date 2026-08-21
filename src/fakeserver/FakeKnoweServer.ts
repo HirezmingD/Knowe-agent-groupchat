@@ -30,6 +30,12 @@ export const NO_SEQ_TYPES: ReadonlySet<string> = new Set([
   'pong',
   'replay_complete',
   'resync_required',
+  'project_directory_required',
+  'project_directory_restored',
+  'project_delete_progress',
+  'token_usage_res',
+  // [v1.0.39] 向前翻页响应：旁路帧（与后端 NO_SEQ_EVENT_TYPES 一致）
+  'history_events',
 ]);
 
 /** 结构事件（进快照 conversation；与后端 STRUCTURAL_EVENT_TYPES 一致） */
@@ -38,11 +44,14 @@ export const STRUCTURAL_TYPES: ReadonlySet<string> = new Set([
   'approval_card',
   'approval_resolved',
   'agents_created',
+  'agent_removed',
   'instruction_injected',
   'report_submitted',
   'error',
   'recovery_notice',
   'user_echo',
+  // [v1.0.39] 夹具对齐前端 envelope.STRUCTURAL_EVENT_TYPES（后端另有
+  // completion_view_v1——前后端存量差异，不属本版本范围，夹具跟前端走）
 ]);
 
 export interface FakeServerOptions {

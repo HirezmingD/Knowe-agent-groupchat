@@ -1240,5 +1240,6 @@
   "token.usage.panel.ctxEntriesUnit": "",
   "token.usage.panel.ctxApprox": "~",
   "token.usage.panel.ctxTokensUnit": "tokens",
-  "token.usage.panel.ctxEmpty": "No data yet"
+  "token.usage.panel.ctxEmpty": "No data yet",
+  "chat.stream.historyLoading": "Loading earlier messages…"
 }

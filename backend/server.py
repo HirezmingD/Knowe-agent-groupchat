@@ -3730,6 +3730,15 @@ class KnoweServer:
         if not isinstance(project_id, str):
             await self._server_error(client, msg("server.py.124"))
             return
+        # [启动时快速加载] 首屏裁剪：limit > 0 让快照 conversation 只下发最近 limit 条
+        # 结构事件（附 total_count / has_more）。旧前端不带 → 全量（行为不变）。
+        raw_limit = data.get("limit", 0)
+        limit = 0
+        if isinstance(raw_limit, (int, float)) and not isinstance(raw_limit, bool):
+            try:
+                limit = max(0, int(raw_limit))
+            except (TypeError, ValueError):
+                limit = 0
         # [v0.37] 私聊频道（dm:{group}:{agent}）直接快照它自己——它是独立的 Hub 频道，
         #   不走项目 id 规范化（那会把 dm: 当未知项目拒掉）。频道不存在就现建一个空的。
         dm = _parse_dm(project_id)
@@ -3741,18 +3750,56 @@ class KnoweServer:
                 # 群还没就绪：先给个空频道，但展示名至少用 agent 段，不能把完整 dm:*
                 # 原始会话 id 注入前端标题。群就绪后的 _ensure_dm_channel 会继续升级名字。
                 self.hub.get_or_create(project_id, dm[1])
-                await self.hub.snapshot(project_id)
+                await self.hub.snapshot(project_id, limit=limit)
                 return
             # [v1.0.24.4] 快照附带权威活动账本（全量）：前端重建现场时忙碌状态一次对齐。
             await self.hub.snapshot(
-                project_id, activity=self._open_activity_all(),
+                project_id, activity=self._open_activity_all(), limit=limit,
             )
             return
         project_id = self._canonical_project_id_from_request(project_id)
         # [v1.0.24.4] 快照附带权威活动账本（全量）：前端重建现场时忙碌状态一次对齐。
         await self.hub.snapshot(
-            project_id, activity=self._open_activity_all(),
+            project_id, activity=self._open_activity_all(), limit=limit,
         )
+
+    # ── request_history（[启动时快速加载] 向前翻页：取比 before_seq 更早的历史） ──
+    async def _cmd_request_history(self, client: Client, data: dict[str, Any]) -> None:
+        project_id = data.get("project_id")
+        if not isinstance(project_id, str) or not project_id:
+            await self._server_error(client, msg("server.py.124"))
+            return
+        before_seq = data.get("before_seq", 0)
+        if not isinstance(before_seq, int) or isinstance(before_seq, bool) or before_seq < 0:
+            await self._server_error(client, msg("server.py.256"))
+            return
+        raw_limit = data.get("limit", 0)
+        limit = 50
+        if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) and raw_limit > 0:
+            limit = max(1, min(raw_limit, 500))
+        # [v0.37] DM 频道同样支持翻页：频道不存在就现建空频道（只会返回空历史）。
+        dm = _parse_dm(project_id)
+        if dm is not None:
+            try:
+                group_id = self._canonical_project_id_from_request(dm[0])
+                self._ensure_dm_channel(project_id, group_id)
+            except ProjectIdResolutionError:
+                self.hub.get_or_create(project_id, dm[1])
+        else:
+            try:
+                project_id = self._canonical_project_id_from_request(project_id)
+            except ProjectIdResolutionError as exc:
+                await self._server_error(client, str(exc))
+                return
+        events, has_more = self.hub.durable_before(project_id, before_seq, limit)
+        earlier_seq = events[0].get("seq", 0) if events else 0
+        await self.hub.send_to(client, {
+            "type": "history_events",
+            "project_id": project_id,
+            "events": events,
+            "earlier_seq": earlier_seq,
+            "has_more": has_more,
+        })
 
     # ── replay_request（非首帧 → 拒绝，前端应改用 request_snapshot） ──
     async def _cmd_replay_request(self, client: Client, data: dict[str, Any]) -> None:

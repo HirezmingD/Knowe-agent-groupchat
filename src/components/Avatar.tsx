@@ -13,6 +13,7 @@
 
 import React, { useLayoutEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { preloadAvatar, avatarCacheState } from '../store/avatarPreload';
 
 export type AvatarSize = 28 | 32 | 36 | 40 | 44;
 export type AvatarPal = 'av-a' | 'av-b' | 'av-c' | 'av-d' | 'av-n';
@@ -85,7 +86,7 @@ export const Avatar: React.FC<AvatarProps> = ({
    */
   useLayoutEffect(() => {
     if (!src) { setLoaded(false); setBroken(false); return; }
-    const st = avatarCache.get(src)?.state;
+    const st = avatarCacheState(src);
     if (st === 'ok') { setLoaded(true); setBroken(false); return; }
     if (st === 'err') { setBroken(true); setLoaded(false); return; }
     let alive = true;
@@ -116,36 +117,6 @@ export const Avatar: React.FC<AvatarProps> = ({
     </div>
   );
 };
-
-/** 页面级头像预加载缓存：src → 加载状态；waiters 是等待该 src 完成的所有挂载方。 */
-const avatarCache = new Map<string, { state: 'loading' | 'ok' | 'err'; waiters: Set<() => void> }>();
-
-function preloadAvatar(src: string): Promise<'ok' | 'err'> {
-  const hit = avatarCache.get(src);
-  if (hit) {
-    const st = hit.state;
-    if (st !== 'loading') return Promise.resolve(st);
-    return new Promise((res) => hit.waiters.add(() => res(hit.state as 'ok' | 'err')));
-  }
-  const entry: { state: 'loading' | 'ok' | 'err'; waiters: Set<() => void> } = { state: 'loading', waiters: new Set() };
-  avatarCache.set(src, entry);
-  return new Promise((res) => {
-    const img = new Image();
-    img.onload = () => {
-      entry.state = 'ok';
-      entry.waiters.forEach((w) => w());
-      entry.waiters.clear();
-      res('ok');
-    };
-    img.onerror = () => {
-      entry.state = 'err';
-      entry.waiters.forEach((w) => w());
-      entry.waiters.clear();
-      res('err');
-    };
-    img.src = src;
-  });
-}
 
 export default Avatar;
 

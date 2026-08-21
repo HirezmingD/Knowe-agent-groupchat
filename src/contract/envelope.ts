@@ -884,11 +884,32 @@ export const StateSnapshotSchema = z.object({
   /** [v1.0.35.3] 未读消息数（后端按 message/approval_card 数好下发），快照重建后据此恢复未读。 */
   unread_count: z.number().int().min(0).optional(),
   /**
+   * [启动时快速加载] 首屏裁剪：conversation 只含最近 limit 条结构事件时，
+   * total_count = 该群全量结构事件数，has_more = 是否还有比首屏更早的历史。
+   * 旧后端不带此字段 → 前端视为全量快照（has_more=false，无翻页标记）。
+   */
+  total_count: z.number().int().min(0).optional(),
+  has_more: z.boolean().optional(),
+  /**
    * [v1.0.24.4] 该群引擎的权威活动账本（可选）。旧后端不带此字段 → 前端退回现状不校准。
    */
   activity: z.array(ActivityLedgerEntrySchema).optional(),
 });
 export type StateSnapshot = z.infer<typeof StateSnapshotSchema>;
+
+/**
+ * [启动时快速加载] 向前翻页响应：events 为比 before_seq 更早的最近 N 条结构事件
+ *（按 seq 升序）。earlier_seq = 这批事件最早的 seq（前端下次翻页的 before_seq）；
+ * has_more = 是否还有更早历史。旁路帧：无 seq、不进水位/去重/空洞判定。
+ */
+export const HistoryEventsSchema = z.object({
+  type: z.literal('history_events'),
+  project_id: z.string(),
+  events: z.array(z.unknown()),
+  earlier_seq: z.number().int().min(0).optional(),
+  has_more: z.boolean().optional(),
+});
+export type HistoryEvents = z.infer<typeof HistoryEventsSchema>;
 
 /**
  * 回放完成
@@ -1052,6 +1073,7 @@ export const InboundEventSchema = z.discriminatedUnion('type', [
   ReplayCompleteSchema,
   ResyncRequiredSchema,
   PongSchema,
+  HistoryEventsSchema,   // [启动时快速加载] 向前翻页响应
 ]);
 export type InboundEvent = z.infer<typeof InboundEventSchema>;
 
@@ -1192,8 +1214,24 @@ export type ReplayRequestCmd = z.infer<typeof ReplayRequestCmdSchema>;
 export const RequestSnapshotCmdSchema = z.object({
   type: z.literal('request_snapshot'),
   project_id: z.string(),            // [v2#8] 必填——根治多项目 resync 断腿
+  // [启动时快速加载] 首屏裁剪：limit > 0 时后端只下发最近 limit 条结构事件
+  //（附 total_count/has_more）。缺省/0 = 全量（旧后端兼容）。
+  limit: z.number().int().min(1).max(500).optional(),
 });
 export type RequestSnapshotCmd = z.infer<typeof RequestSnapshotCmdSchema>;
+
+/**
+ * [启动时快速加载] 向前翻页：请求比 before_seq 更早的历史（上翻加载）。
+ * 后端返回 history_events（旁路响应，无 seq、不进水位/ring）。
+ */
+export const RequestHistoryCmdSchema = z.object({
+  type: z.literal('request_history'),
+  project_id: z.string(),
+  before_seq: z.number().int().min(1),   // 当前最早一条的 seq；往前取更早的
+  limit: z.number().int().min(1).max(500).optional(),   // 缺省后端按 50
+});
+export type RequestHistoryCmd = z.infer<typeof RequestHistoryCmdSchema>;
+
 
 /** [v1.0.35.3] 上报已读水位：切群/聚焦/标记已读时发，后端据此推进 last_read_seq 并落盘。 */
 export const MarkReadCmdSchema = z.object({
@@ -1256,6 +1294,7 @@ export const OutboundCommandSchema = z.discriminatedUnion('type', [
   ReplayRequestCmdSchema,
   RequestSnapshotCmdSchema,
   MarkReadCmdSchema,
+  RequestHistoryCmdSchema,   // [启动时快速加载] 向前翻页
   SetProjectDirectoryCmdSchema,
   CancelProjectDirectoryCmdSchema,
   PingCmdSchema,
@@ -1291,6 +1330,7 @@ export const NO_SEQ_EVENT_TYPES = new Set([
   'project_directory_restored',
   'project_delete_progress',
   'token_usage_res',
+  'history_events',   // [启动时快速加载] 向前翻页响应（旁路，无 seq）
 ]);
 
 /**

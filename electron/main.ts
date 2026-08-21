@@ -70,6 +70,11 @@ import {
 app.commandLine.appendSwitch('remote-debugging-port', '9222');
 app.commandLine.appendSwitch('remote-allow-origins', '*');
 
+// [v1.0.39-B2] 本地请求绕过系统代理（Clash 7891）：dev 下 5173 头像/模块、8080/8081
+// 后端全部直连。系统代理开着时 Chromium 连 127.0.0.1 也走代理 → 每张头像 600ms+，
+// 49 张排队 5-10 秒（curl 直连只要 70ms）。外网请求不受影响（不匹配 bypass 列表）。
+app.commandLine.appendSwitch('proxy-bypass-list', '127.0.0.1;localhost;<-loopback>');
+
 
 // ═══════════════════════════════════════════════════════════════
 // 环境参数（prompt 明确「直接用，不要猜」）

@@ -10,6 +10,27 @@
       React 从 /src/main.tsx 挂到 #root（这两个都是前端源码里已有的，壳不碰）。
     -->
     <title>Knowe知知智能体</title>
+    <script>
+      // [v1.0.39-B2] 头像预载（HTML 解析时立即发起，远早于 React 模块图 2-5 秒）。
+      // 只预热 HTTP/磁盘缓存；组件渲染时 preloadAvatar 同 URL 命中缓存秒出。
+      // 不登记 avatarCache（那是模块层的事），这里纯网络预热，与模块机制互不干扰。
+      (function () {
+        try {
+          var raw = localStorage.getItem('knowe.sessionDir.v1');
+          if (!raw) return;
+          var c = JSON.parse(raw);
+          var seen = {};
+          (c.projects || []).forEach(function (p) {
+            (p.members || []).forEach(function (m) {
+              if (m && m.avatar && !seen[m.avatar]) {
+                seen[m.avatar] = 1;
+                (new Image()).src = m.avatar;
+              }
+            });
+          });
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
