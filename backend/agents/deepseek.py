@@ -46,7 +46,7 @@ from ..config import CONFIG
 from ..agent_identity import coordinator_identity, identity_for
 from ..feature_flags import FeatureFlag, enabled as feature_enabled
 from ..gate import ApprovalCancelled, Gate
-from ..attachments import inject_into_last_user
+from ..attachments import build_format_fallback, inject_into_last_user
 from .base import Emit, Turn
 
 log = logging.getLogger("knowe.deepseek")
@@ -538,6 +538,10 @@ class DeepSeekAgent:
             client_factory=self._client_factory,
             # 老 DEEPSEEK_* 单 agent 路径恒走 OpenAI 兼容（非 harness 主路径，默认 fake）
             transport="openai_chat",
+            # [v1.0.39.2] legacy 单 agent 档同样支持附件格式降级（与 harness 同款）。
+            on_format_rejected=build_format_fallback(
+                "", self.base_url, self.model,
+            ),
         )
 
         deltas: list[str] = []

@@ -58,7 +58,10 @@ _CONTEXT_JSON = ".context.json"
 # ── auxiliary LLM 参数（小调用，只做摘要）──
 _AUX_MAX_TOKENS = 200
 _AUX_TEMPERATURE = 0.0
-_AUX_TIMEOUT_S = 20.0
+_AUX_TIMEOUT_S = 60.0
+# [v1.0.39.2] 20s → 60s：opencode.ai 等慢网关简单摘要实测 10-23s，
+# 20s 边缘必超时 → 记忆摘要静默停摆（一天 19 次「跳过本次摘要」）。
+# 辅助通道超时只影响摘要/翻译，不阻塞主流程，给足余量换取记忆连续性。
 
 # ── Project Memory v2：有界快照 + 永久历史 ──
 _STATE_SCHEMA = 4

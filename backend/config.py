@@ -194,7 +194,7 @@ class Config:
     knowledge_aux_max_tokens: int = field(
         default_factory=lambda: int(os.environ.get("KNOWE_KG_AUX_MAX_TOKENS", "900")))
     knowledge_aux_timeout_s: float = field(
-        default_factory=lambda: float(os.environ.get("KNOWE_KG_AUX_TIMEOUT", "25")))
+            default_factory=lambda: float(os.environ.get("KNOWE_KG_AUX_TIMEOUT", "60")))
     # 图谱可从 handoff 重建；关机只短暂尽力排空，避免项目切换被辅助 LLM 拖住。
     knowledge_shutdown_drain_s: float = field(
         default_factory=lambda: float(os.environ.get("KNOWE_KG_SHUTDOWN_DRAIN", "3")))

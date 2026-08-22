@@ -1,3 +1,9 @@
 websockets>=14
 httpx>=0.27        # 只有真 LLM 档（KNOWE_AGENT=deepseek）才需要；Fake 档不用
 python-dotenv>=1.0   # 业主用 .env 放 DEEPSEEK_API_KEY
+# [v1.0.39.2] 附件格式降级：本地提取文件文字（pdf/docx/xlsx/pptx/xls）喂模型
+PyMuPDF>=1.24      # fitz：PDF 文字层提取
+python-docx>=1.0   # docx 段落文字
+openpyxl>=3.1      # xlsx 单元格文字
+python-pptx>=0.6   # pptx 幻灯片文字
+xlrd>=2.0          # xls 老格式

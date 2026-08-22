@@ -264,7 +264,13 @@ from .config import CONFIG
 from . import runtime_settings   # [v0.44 设置] /settings 端点 + 引擎热更新的权威状态
 from . import identity_store     # [v1.0.38.2] 全局成员身份表（跨项目改名/换头像真源）
 from . import aux_client         # [v1.0.19.4] 报错翻译（附件被打回时把机器错误译成人话）
-from .attachments import AttachmentError, build_parts, echo_meta
+from .attachments import (
+    AttachmentError,
+    build_parts,
+    echo_meta,
+    file_unsupported,
+    replace_file_blocks_with_text,
+)
 from .feature_flags import FeatureFlag, enabled as feature_enabled, snapshot as feature_flag_snapshot
 from .contract import ContractViolation, now_ts
 from .delete_ops import (
@@ -2682,6 +2688,19 @@ class KnoweServer:
             # [v1.0.19.4] 用**持久**附件签名密钥验签（缺省回退 runtime_token）——
             #   这样重启后历史消息里的旧签名仍然有效，回看历史文件卡不会被误判成「校验未通过」。
             parts, _metas = build_parts(records, CONFIG.attachment_key or CONFIG.runtime_token)
+            # [v1.0.39.2] 能力缓存命中（该网关已被实测拒绝 file 块）→ 打包时直接
+            #   把 file 块换成 text 块，跳过 400 往返（首次仍走降级重发路径）。
+            #   键用当前主模型绑定；回调侧用实际使用模型标记，键一致才命中。
+            main = runtime_settings.snapshot().get("main_model") or {}
+            if file_unsupported(
+                main.get("provider"), main.get("base_url"), main.get("model"),
+            ):
+                outcome = replace_file_blocks_with_text(parts)
+                if outcome["failed"]:
+                    log.warning(
+                        "[%s] 能力缓存命中降级：%d 个文件无文字可提取",
+                        channel, len(outcome["failed"]),
+                    )
             return True, parts
         except AttachmentError as exc:
             friendly = await self._aux_translate_error(str(exc))

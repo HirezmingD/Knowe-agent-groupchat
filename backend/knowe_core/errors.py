@@ -31,6 +31,7 @@ class ProviderError(KnoweError):
         attempts: int = 0,
         max_attempts: int = 0,
         cause_type: str = "",
+        format_rejected: str | None = None,
     ) -> None:
         # Some httpx/httpcore exceptions intentionally have an empty ``str(exc)``.  Never
         # let that erase the only diagnostic that reaches a non-technical user.
@@ -45,6 +46,10 @@ class ProviderError(KnoweError):
         self.attempts = max(0, int(attempts or 0))
         self.max_attempts = max(0, int(max_attempts or 0))
         self.cause_type = str(cause_type or "")
+        # [v1.0.39.2] 网关明确拒绝的**内容块格式**（如 file 块不被支持）。
+        #   None = 普通错误；"file" = 本次请求含 file 块且网关点名拒绝。
+        #   上层据此做单次格式降级重发（换 text 块），不改变 retryable 语义。
+        self.format_rejected = str(format_rejected) if format_rejected else None
 
     def with_retry_context(
         self,

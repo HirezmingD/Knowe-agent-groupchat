@@ -205,6 +205,7 @@ class ProviderClient:
         provider: str = "",
         backoff_base: float = DEFAULT_BACKOFF_BASE,
         transport: str = "openai_chat",
+        on_format_rejected=None,
     ):
         normalized_base = base_url.rstrip("/")
         # HTTPX requires an absolute URL even when MockTransport intercepts the request.
@@ -221,6 +222,10 @@ class ProviderClient:
         self.backoff_base = max(0.0, float(backoff_base or 0.0))
         self._client_factory = client_factory
         self._injected_client: httpx.AsyncClient | None = None
+        # [v1.0.39.2] 格式降级回调：网关 400 点名拒绝某内容块格式
+        #   （如 file 块不认）时，用回调把 messages 换格式后**单次重发**。
+        #   默认 None = 老行为（不降级，直接抛错）。回调签名 (messages) -> messages。
+        self._on_format_rejected = on_format_rejected
 
         self._headers = {
             "Content-Type": "application/json",
@@ -352,24 +357,16 @@ class ProviderClient:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Yield provider-neutral SSE events with safe pre-output retries."""
 
-        if self.transport == "anthropic_messages":
-            body = encode_anthropic_request(
-                model=self.model,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-        else:
-            body = self._build_body(
-                messages,
-                tools,
-                temperature,
-                max_tokens,
-                stream=True,
-                extra_body=extra_body,
-            )
-        total_attempts = self.max_retries + 1
+        body = self._build_stream_body(
+            messages, tools, temperature, max_tokens, extra_body,
+        )
+        # [v1.0.39.2] 循环槽位 = 正常重试次数 + 1 个降级槽。降级 continue 会消耗
+        #   一个额外槽位；未触发降级时多出的槽永远不会被走到（正常路径在
+        #   attempt == max_retries 那轮要么 return 要么 raise），重试语义逐字节不变。
+        total_attempts = self.max_retries + 2
+        # 格式降级重发标记：同一请求最多降级重发一次
+        #   （换格式后再失败 = 网关真有问题，照常抛错，绝不无限重试）。
+        format_retried = False
 
         for attempt in range(total_attempts):
             emitted_event = False
@@ -388,6 +385,22 @@ class ProviderClient:
                         yield event
                 return
             except ProviderError as exc:
+                # [v1.0.39.2] 网关点名拒绝 file 块且配置了降级回调 → 换 text 块重发一次。
+                #   必须发生在任何输出之前（emitted_event=False），否则不降级。
+                if (
+                    not emitted_event
+                    and not format_retried
+                    and getattr(exc, "format_rejected", None) == "file"
+                    and self._on_format_rejected is not None
+                ):
+                    new_messages = self._on_format_rejected(messages)
+                    if new_messages is not None:
+                        format_retried = True
+                        messages = new_messages
+                        body = self._build_stream_body(
+                            messages, tools, temperature, max_tokens, extra_body,
+                        )
+                        continue
                 exc.with_retry_context(
                     attempts=attempt + 1,
                     max_attempts=total_attempts,
@@ -432,6 +445,36 @@ class ProviderClient:
         raise ProviderError("Provider retry loop ended unexpectedly.")
 
     # ── Request/retry helpers ──
+
+    def _build_stream_body(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        extra_body: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """[v1.0.39.2] 流式请求体构建（chat_stream 与格式降级重发共用）。
+
+        降级重发时 messages 已被回调换格式，body 必须重建——抽出这个
+        私有方法保证两处走同一条构建路径，不会出现新旧 body 不一致。
+        """
+        if self.transport == "anthropic_messages":
+            return encode_anthropic_request(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        return self._build_body(
+            messages,
+            tools,
+            temperature,
+            max_tokens,
+            stream=True,
+            extra_body=extra_body,
+        )
 
     def _build_body(
         self,
@@ -642,6 +685,12 @@ class ProviderClient:
             model=self.model,
             response_body=body,
         )
+        # [v1.0.39.2] 网关点名拒绝内容块格式（OpenAI 兼容网关普遍未实现新版 file 块）。
+        #   把该信号带在错误上（format_rejected="file"），上层据此单次格式降级重发。
+        if code == 400 and "invalid value: file" in body.lower():
+            raise ProviderError(
+                message, code, body, retryable=False, format_rejected="file",
+            )
         if code == 401:
             raise ProviderAuthError(message, 401, body, retryable=False)
         if code in (402, 403):

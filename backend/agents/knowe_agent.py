@@ -18,7 +18,7 @@ from knowe_core.provider_client import ClientFactory, ProviderClient, build_http
 from knowe_core.tool_registry import ToolRegistry
 
 from ..config import CONFIG
-from ..attachments import inject_into_last_user
+from ..attachments import build_format_fallback, inject_into_last_user
 from ..context_compressor import project_messages
 from ..token_usage import TokenUsageCollector, extract_token_usage, extract_token_usage_parts
 from knowe_core.provider_client import normalize_usage_buckets
@@ -197,6 +197,12 @@ class KnoweAgent:
             client_factory=client_factory,
             provider=cfg.provider,
             transport=cfg.transport,
+            # [v1.0.39.2] 附件格式降级：网关不认 file 块 → 回调换 text 块单次重发。
+            #   Coordinator（run_conversation）与 Worker（model_adapter 借 _client）
+            #   共用同一个 ProviderClient，此处挂一次两侧同效。
+            on_format_rejected=build_format_fallback(
+                cfg.provider, cfg.base_url, cfg.model,
+            ),
         )
         self._tool_registry = tool_registry or ToolRegistry()
         # Only the Coordinator uses durable raw AgentLoop messages. Worker state is

@@ -51,3 +51,7 @@ Thumbs.db
 *.7z
 build/
 assets/videos/compressed/
+
+# [v1.0.39.2] 数据迁移残留备份（改名保留，不进仓库）
+backend/data.stale-*/
+

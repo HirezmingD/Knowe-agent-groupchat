@@ -77,6 +77,7 @@ class ProviderModelAdapter:
         base_url = str(getattr(source, "base_url", "") or "")
         if base_url:
             from knowe_core.provider_client import ProviderClient
+            from backend.attachments import build_format_fallback
 
             # 从 source 携带 transport（ProviderConfig 或 source 本身上）：legacy 重建
             # 分支也必须保持协议一致，否则 anthropic 主模型会退化成 openai 传输而打错端点。
@@ -86,13 +87,20 @@ class ProviderModelAdapter:
             )
             src_transport = getattr(source, "transport", "") or ""
             transport = (cfg_transport or src_transport) or "openai_chat"
+            # [v1.0.39.2] legacy 重建分支同样挂附件格式降级回调（与 KnoweAgent 一致）。
+            model = str(getattr(source, "model", "") or "")
+            provider = str(getattr(provider_cfg, "provider", "")) if provider_cfg is not None else str(getattr(source, "provider", ""))
             return cls(
                 ProviderClient(
                     base_url=base_url,
                     api_key=str(getattr(source, "api_key", "") or ""),
-                    model=str(getattr(source, "model", "") or ""),
+                    model=model,
                     client_factory=getattr(source, "_client_factory", None),
                     transport=transport,
+                    provider=provider,
+                    on_format_rejected=build_format_fallback(
+                        provider, base_url, model,
+                    ),
                 ),
                 **kwargs,
             )

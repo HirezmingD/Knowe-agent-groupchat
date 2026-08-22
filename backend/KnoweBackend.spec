@@ -76,6 +76,12 @@ a = Analysis(
         "duckduckgo_search",
         "yaml",
         "dotenv",
+        # [v1.0.39.2] 附件文本提取依赖（fitz 带二进制，须显式隐导入）
+        "fitz",
+        "docx",
+        "openpyxl",
+        "pptx",
+        "xlrd",
     ],
     hookspath=[],
     hooksconfig={},
